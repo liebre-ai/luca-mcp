@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 
-from luca_mcp.settings import Settings
-
 GUIDELINES = """# Luca guidelines (read-only accounting assistant for Liebre users)
 
-You act on behalf of a logged-in Liebre user, with that user's own permissions. Everything you see
-comes from the Liebre API for the businesses the user can access.
+You act on behalf of a logged-in Liebre user through a local client that talks to Luca's server
+(ant-rai). If a tool says you are not logged in, call `login` (it opens the browser) and retry.
+Luca checks that the user is an active Liebre user and that each business is granted to them; it
+does not apply role-level permissions on this path, so treat every figure as visible to the user
+but do not assume it reflects a role restriction.
 
 ## Vocabulary
 - Business (`bu-<n>`): a company kept in Liebre. Accounting firm (`af-<n>`): the firm that keeps
@@ -40,8 +41,8 @@ comes from the Liebre API for the businesses the user can access.
 5. SAT side: `list_declaraciones` for filing status per month; `list_sat_archives` and
    `get_sat_archive` for what was declared (DIOT totals/details, constancia, opinión);
    `list_documents` / `get_document` for the files.
-6. Errors come as `{"error": {"code", "message", "hint", ...}}`. `login_expired`: ask the user to
-   run /mcp and log in again. `unknown_business`: call `list_businesses`. `forbidden`: the user's
+6. Errors come as `{"error": {"code", "message", "hint", ...}}`. `not_authenticated` /
+   `login_expired`: call `login` (or the user runs `luca-mcp login`). `unknown_business`: call `list_businesses`. `forbidden`: the user's
    Liebre role lacks the permission; point to the platform. `upstream_unavailable`: retry later.
 
 ## Boundaries (say them plainly)
@@ -91,7 +92,7 @@ map a VAT account), and give the platform link from the response.
 """
 
 
-def register(mcp: FastMCP, settings: Settings) -> None:
+def register(mcp: FastMCP) -> None:
     @mcp.prompt(
         name="luca_guidelines",
         description="Rules, vocabulary and boundaries for working with Luca. Load first.",

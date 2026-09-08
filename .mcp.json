@@ -1,8 +1,10 @@
 {
   "mcpServers": {
     "luca-dev": {
-      "type": "http",
-      "url": "http://localhost:8765/mcp"
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "luca-mcp"],
+      "env": { "LUCA_RAI_URL": "http://localhost:3030" }
     }
   }
 }

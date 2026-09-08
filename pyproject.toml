@@ -1,31 +1,32 @@
 [project]
 name = "luca-mcp"
-version = "0.1.0"
-description = "Luca MCP: Liebre accounting for AI agents (Claude Code, Codex, Cursor, claude.ai)"
+version = "0.2.0"
+description = "Luca MCP client: Liebre accounting tools for Claude Code, Codex and other MCP agents (stdio)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    # MCP server framework. Pinned: the OAuth proxy subclass in src/luca_mcp/auth.py
-    # relies on internals verified against exactly this version (see docs/plans).
+    # stdio MCP server framework
     "fastmcp==4.0.3",
     "mcp==2.2.0",
     "httpx>=0.28",
     "pydantic>=2.11",
-    "pydantic-settings>=2.10",
-    # Shared OAuth state store (memory for the single-instance beta, redis after).
-    "py-key-value-aio[redis]>=0.4.5",
-    "cryptography>=45",
-    "uvicorn[standard]>=0.35",
+    # OS keychain for the rai tokens (file fallback when unavailable)
+    "keyring>=25",
 ]
+
+[project.scripts]
+luca-mcp = "luca_mcp.cli:main"
 
 [dependency-groups]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=1",
     "ruff==0.13.2",
-    # dev/mock_idp.py mints RS256 tokens; the e2e harness decodes them.
+    # dev/mock_idp.py mints RS256 tokens
     "pyjwt[crypto]>=2.10",
-    "python-dotenv>=1.1",
+    "starlette>=0.47",
+    "uvicorn>=0.35",
+    "cryptography>=45",
 ]
 
 [build-system]

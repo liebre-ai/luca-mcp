@@ -1,42 +1,78 @@
-"""Tool E2E suite against the dev Liebre API (bu-2 / af-2) through the real OAuth session.
+"""Tool E2E suite for the Luca MCP client: client -> rai (OAuth server + MCP endpoints) -> Liebre.
 
-Run:  uv run python tests/e2e/tools_suite.py            (server + mock IdP running)
+Run:  LUCA_RAI_URL=http://localhost:3030 uv run python tests/e2e/tools_suite.py [--only <substr>]
+      (rai dev server on LUCA_RAI_URL, mock IdP from dev/run_local.sh as rai's Auth0 stand-in)
 Writes .e2e-artifacts/tools-suite.json with every case's detail.
 
+Every tool call goes through the real client code (in-process FastMCP client over `create_server`,
+plus one case through the real `uv run luca-mcp` stdio process). Logins run the real browser flow
+with a scripted browser. Identities are synthetic dev accounts of the sandbox firm af-2 only.
+
 Cases cover happy paths with known bu-2 facts, malformed inputs, permission/identity edge cases,
-empty results, large results, paging and concurrency.
+login refusals, token expiry and refresh, logout, empty results, large results, paging, concurrency
+and the seeded bu-2 fixtures (tests/e2e/fixtures/bu-2-seed-manifest.json).
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
+import os
 import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).parent))
+os.environ.setdefault("LUCA_MCP_CREDENTIAL_STORE", "file")
+os.environ.setdefault("LUCA_RAI_URL", "http://localhost:3030")
+
 import harness as h  # noqa: E402
 
-REPORT = Path(".e2e-artifacts/tools-suite.json")
+from luca_mcp import oauth  # noqa: E402
+from luca_mcp.config import Config, load_config  # noqa: E402
+
+ARTIFACTS = Path(".e2e-artifacts")
+REPORT = ARTIFACTS / "tools-suite.json"
 BU = "bu-2"
+FIRM = "af-2"
+DEFAULT = h.DEFAULT_IDENTITY  # ygreen@company.com: firm admin of af-2, allowed on bu-2
+RESTRICTED = "jd@yopmail.com"  # active, allowed on exactly one af-2 business, denied on bu-2
+RESTRICTED_BUSINESS = "bu-1328"
+DISABLED = "Tom.Hagen.10@yopmail.com"  # user_account_status = disabled in Liebre dev
+UNKNOWN = "unknown.user@yopmail.com"  # not a Liebre user
+NO_EMAIL = "__no_email__"  # identity provider returns no e-mail claim
+
 results: list[dict[str, Any]] = []
-_session: h.Session | None = None
+_logged_in: set[str] = set()
 
 
-def session() -> h.Session:
-    global _session
-    if _session is None:
-        _session = h.login(save=False)
-    return _session
+def cfg(identity: str = DEFAULT, *, login_timeout: float = 60.0) -> Config:
+    """One credential directory per identity so sessions never mix."""
+    slug = identity.replace("@", "_at_").replace(".", "_").replace("__", "x").lower()
+    base = load_config()
+    return dataclasses.replace(
+        base, config_dir=ARTIFACTS / "config" / slug, login_timeout=login_timeout
+    )
+
+
+def session(identity: str = DEFAULT) -> Config:
+    config = cfg(identity)
+    if identity not in _logged_in:
+        if oauth.current_tokens(config) is None:
+            h.login(identity, config=config)
+        _logged_in.add(identity)
+    return config
 
 
 def call(
-    tool: str, args: dict[str, Any] | None = None, *, token: str | None = None
+    tool: str, args: dict[str, Any] | None = None, *, identity: str = DEFAULT
 ) -> dict[str, Any]:
-    return asyncio.run(h.mcp_call(token or session().access_token or "", tool, args or {}))
+    return asyncio.run(h.mcp_call(tool, args or {}, config=session(identity)))
 
 
 def ok(result: dict[str, Any]) -> dict[str, Any]:
@@ -67,6 +103,18 @@ def expect(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def refused_login(identity: str) -> tuple[str, float]:
+    """Run the real login for an identity rai must refuse; return (message, seconds)."""
+    config = cfg(identity, login_timeout=60.0)
+    oauth.clear_tokens(config)
+    started = time.time()
+    try:
+        h.login(identity, config=config)
+    except (oauth.LoginError, h.HarnessError) as exc:
+        return str(exc), time.time() - started
+    raise AssertionError(f"login as {identity} succeeded but must be refused")
+
+
 def case(name: str) -> Callable[[Callable[[], Any]], Callable[[], Any]]:
     def wrap(fn: Callable[[], Any]) -> Callable[[], Any]:
         def run() -> None:
@@ -81,7 +129,7 @@ def case(name: str) -> Callable[[Callable[[], Any]], Callable[[], Any]]:
                         "ms": int((time.time() - started) * 1000),
                     }
                 )
-                print(f"PASS  {name}")
+                print(f"PASS  {name}", flush=True)
             except Exception as exc:  # noqa: BLE001
                 results.append(
                     {
@@ -91,7 +139,7 @@ def case(name: str) -> Callable[[Callable[[], Any]], Callable[[], Any]]:
                         "ms": int((time.time() - started) * 1000),
                     }
                 )
-                print(f"FAIL  {name}: {exc!r}"[:400])
+                print(f"FAIL  {name}: {exc!r}"[:400], flush=True)
 
         run.__name__ = fn.__name__
         return run
@@ -100,19 +148,67 @@ def case(name: str) -> Callable[[Callable[[], Any]], Callable[[], Any]]:
 
 
 # --------------------------------------------------------------------------------------------
-# whoami / businesses / periods
+# server surface, whoami / businesses / periods
 # --------------------------------------------------------------------------------------------
 
 
-@case("whoami: identity, access, server build")
+@case("tools: 18 tools listed, data tools read-only, session tools not destructive-by-default")
+def t_tools() -> Any:
+    tools = asyncio.run(h.mcp_list_tools(session()))
+    names = {t["name"] for t in tools}
+    expected = {
+        "login",
+        "logout",
+        "whoami",
+        "list_businesses",
+        "get_business",
+        "list_periods",
+        "get_trial_balance",
+        "get_balance_sheet",
+        "get_income_statement",
+        "get_vat_determination",
+        "search_journal_entries",
+        "list_journal_entries_for_period",
+        "get_journal_entry",
+        "list_declaraciones",
+        "list_sat_archives",
+        "get_sat_archive",
+        "list_documents",
+        "get_document",
+    }
+    expect(names == expected, f"tool names differ: {sorted(names ^ expected)}")
+    data_tools = [t for t in tools if t["name"] not in ("login", "logout")]
+
+    def read_only(tool: dict[str, Any]) -> bool:  # fastmcp's model dumps snake_case
+        ann = tool.get("annotations") or {}
+        return ann.get("readOnlyHint", ann.get("read_only_hint")) is True
+
+    expect(all(read_only(t) for t in data_tools), "every data tool is annotated read-only")
+    expect(all((t.get("description") or "").strip() for t in tools), "every tool has a description")
+    return {"count": len(tools)}
+
+
+@case("whoami: identity, Liebre account, firms, businesses without deleted ones")
 def t_whoami() -> Any:
     s = ok(call("whoami"))
-    expect(s["session"]["email"] == h.DEFAULT_IDENTITY, "email")
-    expect(
-        s["access"]["business_count"] > 300, f"business_count {s['access'].get('business_count')}"
-    )
+    expect(s["logged_in"] is True, "logged_in")
+    expect(s["session"]["email"] == DEFAULT, "email")
+    expect(s["session"]["liebre_user_id"] == "us-2", f"liebre id {s['session']}")
     expect(s["server"]["read_only"] is True, "read_only flag")
-    return {"business_count": s["access"]["business_count"], "build": s["server"]["build"]}
+    firms = {f["accounting_firm_id"]: f for f in s["access"]["firms"]}
+    expect(FIRM in firms and firms[FIRM]["sandbox"] is True, f"firms {list(firms)}")
+    businesses = s["access"]["businesses"]
+    expect(
+        s["access"]["business_count"] > 300 and len(businesses) == s["access"]["business_count"],
+        f"business_count {s['access'].get('business_count')}",
+    )
+    expect(all(b["status"] != "deleted" for b in businesses), "deleted businesses are hidden")
+    expect(all(b["accounting_firm_name"] for b in businesses), "firm names resolved")
+    return {
+        "business_count": s["access"]["business_count"],
+        "version": s["server"]["version"],
+        "statuses": sorted({b["status"] for b in businesses}),
+    }
 
 
 @case("list_businesses: default page, query match, no match, paging bounds")
@@ -159,8 +255,22 @@ def t_business() -> Any:
 def t_scoping() -> Any:
     e = err(call("get_business", {"business_id": "bu-999999999"}), "unknown_business")
     expect("list_businesses" in (e.get("hint") or ""), "hint mentions list_businesses")
-    err(call("get_business", {"business_id": "'; DROP TABLE business; --"}), "unknown_business")
-    err(call("get_business", {"business_id": "../../accounting_firms"}), "unknown_business")
+    err(call("get_business", {"business_id": "bu-2';DROP"}), "unknown_business")  # reaches rai
+    # ids that could change the request path (or contain whitespace) never leave the client
+    for traversal in (
+        "../../accounting_firms",
+        "bu-2/periods",
+        "bu-2?x=1",
+        "bu-2#f",
+        "bu 2",
+        "'; DROP TABLE business; --",
+    ):
+        e = err(call("get_business", {"business_id": traversal}), "invalid_input")
+        expect("business_id" in e["message"], f"names the argument: {e['message']}")
+    err(
+        call("get_journal_entry", {"business_id": BU, "journal_entry_id": "../periods/202608"}),
+        "invalid_input",
+    )
     err(call("get_business", {"business_id": ""}), "invalid_input")
     err(
         call("get_business", {"business_id": BU, "accounting_firm_id": "af-999"}),
@@ -181,8 +291,8 @@ def t_periods() -> Any:
     expect(all(p["period_id"].startswith("2026") for p in y2026["periods"]), "year filter")
     expect(y2026["last_open_period"]["period_id"] == "202608", "last open")
     err(call("list_periods", {"business_id": BU, "year": 1999}), "invalid_input")
-    # A non-integer year never reaches the tool: fastmcp validates the schema first and answers
-    # with pydantic's message, which is acceptable (clear, no upstream call).
+    # A non-integer year never reaches rai: fastmcp validates the schema first and answers with
+    # pydantic's message, which is acceptable (clear, no upstream call).
     bad_type = call("list_periods", {"business_id": BU, "year": "abc"})
     expect(
         bad_type["is_error"] and "valid integer" in bad_type["text"],
@@ -651,124 +761,8 @@ def t_documents() -> Any:
 
 
 # --------------------------------------------------------------------------------------------
-# identity edge cases and robustness
+# seeded bu-2 fixtures (never deleted: they are the evidence)
 # --------------------------------------------------------------------------------------------
-
-
-@case("identity: e-mail unknown to Liebre -> login_expired with hint; whoami still answers")
-def t_unknown_user() -> Any:
-    other = h.login(identity="unknown.user@yopmail.com", save=False)
-    e = err(call("list_businesses", token=other.access_token), "login_expired")
-    expect("unknown.user@yopmail.com" in (e.get("hint") or ""), "hint names the e-mail")
-    me = ok(call("whoami", token=other.access_token))
-    expect(
-        me["access"].get("error", {}).get("code") == "login_expired",
-        "whoami surfaces the access error",
-    )
-    return e
-
-
-@case("identity: token without e-mail -> no_email_claim (fail closed)")
-def t_no_email() -> Any:
-    other = h.login(identity="__no_email__", save=False)
-    e = err(call("list_businesses", token=other.access_token), "no_email_claim")
-    err(
-        call(
-            "get_trial_balance",
-            {"business_id": BU, "start_period_id": "202608"},
-            token=other.access_token,
-        ),
-        "no_email_claim",
-    )
-    return e["message"]
-
-
-@case("concurrency: 8 parallel report calls for different periods succeed")
-def t_concurrency() -> Any:
-    periods = ["202601", "202602", "202603", "202604", "202605", "202606", "202607", "202608"]
-
-    async def burst() -> list[dict[str, Any]]:
-        return await asyncio.gather(
-            *[
-                h.mcp_call(
-                    session().access_token or "",
-                    "get_trial_balance",
-                    {"business_id": BU, "start_period_id": p},
-                )
-                for p in periods
-            ]
-        )
-
-    outs = asyncio.run(burst())
-    expect(
-        all(not o["is_error"] for o in outs),
-        f"errors: {[o['text'][:80] for o in outs if o['is_error']]}",
-    )
-    return {"periods": len(outs), "statuses": [o["structured_content"]["status"] for o in outs]}
-
-
-@case("robustness: wrong argument types and unknown arguments are rejected cleanly")
-def t_types() -> Any:
-    r1 = call("list_periods", {"business_id": 42})
-    r2 = call(
-        "get_trial_balance",
-        {"business_id": BU, "start_period_id": "202608", "only_detail_accounts": "yes please"},
-    )
-    r3 = call("list_businesses", {"unknown_argument": 1})
-    return {
-        "business_id_int": r1["is_error"],
-        "bool_as_text": r2["is_error"],
-        "unknown_arg": r3["is_error"],
-        "texts": [r1["text"][:80], r2["text"][:80], r3["text"][:80]],
-    }
-
-
-@case("prompts: guidelines and navigation are served")
-def t_prompts() -> Any:
-    from fastmcp import Client
-    from fastmcp.client.auth import BearerAuth
-
-    async def run() -> dict[str, Any]:
-        async with Client(
-            h.MCP_URL, auth=BearerAuth(session().access_token or ""), timeout=30
-        ) as client:
-            prompts = await client.list_prompts()
-            names = [p.name for p in prompts]
-            got = await client.get_prompt("luca_navigation")
-            return {"names": names, "chars": len(str(got.messages[0].content))}
-
-    out = asyncio.run(run())
-    expect(set(out["names"]) >= {"luca_guidelines", "luca_navigation"}, f"prompts {out['names']}")
-    return out
-
-
-@case(
-    "identity: restricted (standard_user) synthetic account sees only its business and can report"
-)
-def t_restricted_user() -> Any:
-    other = h.login(identity="Tom.Hagen.10@yopmail.com", save=False)
-    listing = ok(call("list_businesses", token=other.access_token))
-    expect(
-        listing["total"] == 1 and listing["businesses"][0]["business_id"] == BU,
-        f"restricted listing {listing['total']}",
-    )
-    tb = ok(
-        call(
-            "get_trial_balance",
-            {"business_id": BU, "start_period_id": "202608"},
-            token=other.access_token,
-        )
-    )
-    expect(
-        tb["status"] in ("ready", "processing") and tb["row_count"] > 0,
-        "restricted user can read reports",
-    )
-    err(
-        call("get_business", {"business_id": "bu-1240"}, token=other.access_token),
-        "unknown_business",
-    )
-    return {"total_visible": listing["total"], "rows": tb["row_count"]}
-
 
 SEED_MANIFEST = Path(__file__).parent / "fixtures" / "bu-2-seed-manifest.json"
 
@@ -911,8 +905,327 @@ def t_seed_statuses() -> Any:
     return {"summary": by_status, "seeded_in_period": listing["total"]}
 
 
+# --------------------------------------------------------------------------------------------
+# identities: refusals at login, restricted access, session lifecycle
+# --------------------------------------------------------------------------------------------
+
+
+@case("login refused: e-mail unknown to Liebre is rejected by rai, client reports the reason")
+def t_unknown_user() -> Any:
+    message, seconds = refused_login(UNKNOWN)
+    expect("not a Liebre user" in message, f"reason missing: {message[:200]}")
+    expect(seconds < 30, f"refusal took {seconds:.0f}s (client must not wait for its timeout)")
+    expect(oauth.load_tokens(cfg(UNKNOWN)) is None, "no credentials stored")
+    return {"message": message[:160], "seconds": round(seconds, 1)}
+
+
+@case("login refused: identity without an e-mail claim is rejected (fail closed)")
+def t_no_email() -> Any:
+    message, seconds = refused_login(NO_EMAIL)
+    expect("e-mail" in message.lower(), f"reason missing: {message[:200]}")
+    expect(seconds < 30, f"refusal took {seconds:.0f}s")
+    return {"message": message[:160], "seconds": round(seconds, 1)}
+
+
+@case("login refused: disabled Liebre account is rejected with its status")
+def t_disabled_user() -> Any:
+    message, seconds = refused_login(DISABLED)
+    expect("disabled" in message, f"reason missing: {message[:200]}")
+    expect(seconds < 30, f"refusal took {seconds:.0f}s")
+    return {"message": message[:160], "seconds": round(seconds, 1)}
+
+
+@case("login refused: user declines at the identity provider -> access_denied, no credentials")
+def t_user_declines() -> Any:
+    config = cfg("declines", login_timeout=60.0)
+    oauth.clear_tokens(config)
+    started = time.time()
+    try:
+        h.login(DEFAULT, config=config, login_decision="deny")
+    except (oauth.LoginError, h.HarnessError) as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("login succeeded although the user declined")
+    seconds = time.time() - started
+    expect("access_denied" in message or "denied" in message.lower(), f"message {message[:200]}")
+    expect(seconds < 30 and oauth.load_tokens(config) is None, "fast, nothing stored")
+    return {"message": message[:160], "seconds": round(seconds, 1)}
+
+
+@case("identity: restricted account sees only its business; bu-2 is unknown to it")
+def t_restricted_user() -> Any:
+    me = ok(call("whoami", identity=RESTRICTED))
+    expect(me["session"]["email"] == RESTRICTED, "restricted identity")
+    expect(
+        me["access"]["business_count"] == 1
+        and me["access"]["businesses"][0]["business_id"] == RESTRICTED_BUSINESS,
+        f"restricted access {me['access'].get('businesses')}",
+    )
+    listing = ok(call("list_businesses", identity=RESTRICTED))
+    expect(
+        listing["total"] == 1 and listing["businesses"][0]["business_id"] == RESTRICTED_BUSINESS,
+        f"restricted listing {listing['total']}",
+    )
+    e = err(call("get_business", {"business_id": BU}, identity=RESTRICTED), "unknown_business")
+    expect(BU in e["message"] and "list_businesses" in (e.get("hint") or ""), "hint")
+    err(
+        call(
+            "get_trial_balance",
+            {"business_id": BU, "start_period_id": "202608"},
+            identity=RESTRICTED,
+        ),
+        "unknown_business",
+    )
+    err(
+        call("get_business", {"business_id": BU, "accounting_firm_id": FIRM}, identity=RESTRICTED),
+        "unknown_business",
+    )
+    return {"visible": [b["business_id"] for b in listing["businesses"]]}
+
+
+@case("session: refresh on expired token, login_expired when refresh dies, logout, re-login")
+def t_session_lifecycle() -> Any:
+    config = cfg("lifecycle", login_timeout=60.0)
+    oauth.clear_tokens(config)
+    first = h.login(DEFAULT, config=config)
+    expect(first.refresh_token is not None, "refresh token issued")
+    me = ok(asyncio.run(h.mcp_call("whoami", {}, config=config)))
+    expect(me["logged_in"] and me["session"]["email"] == DEFAULT, "fresh session works")
+
+    # 1) access token expired locally -> refreshed before the call, rotated refresh token
+    oauth.save_tokens(config, dataclasses.replace(first, expires_at=time.time() - 10))
+    me = ok(asyncio.run(h.mcp_call("whoami", {}, config=config)))
+    after = oauth.load_tokens(config)
+    expect(me["logged_in"] and after is not None, "call after local expiry works")
+    expect(after.access_token != first.access_token, "access token refreshed")
+    rotated = after.refresh_token != first.refresh_token
+
+    # 2) access token rejected by rai (tampered) -> 401 -> refresh -> retry succeeds
+    oauth.save_tokens(
+        config, dataclasses.replace(after, access_token=after.access_token[:-4] + "xxxx")
+    )
+    me = ok(asyncio.run(h.mcp_call("whoami", {}, config=config)))
+    expect(me["logged_in"] is True, "tampered access token recovered through refresh")
+    again = oauth.load_tokens(config)
+
+    # 3) refresh token dead too -> login_expired with a hint, credentials remain until logout
+    oauth.save_tokens(
+        config,
+        dataclasses.replace(again, access_token="garbage", refresh_token="garbage-refresh"),
+    )
+    e = err(asyncio.run(h.mcp_call("list_businesses", {}, config=config)), "login_expired")
+    expect("login" in (e.get("hint") or "").lower(), "hint says how to log in again")
+    me = ok(asyncio.run(h.mcp_call("whoami", {}, config=config)))
+    expect(me["logged_in"] is False and me["error"]["code"] == "login_expired", "whoami explains")
+
+    # 4) logout clears everything; calls answer not_authenticated; whoami says logged out
+    out = ok(asyncio.run(h.mcp_call("logout", {}, config=config)))
+    expect(out["logged_out"] is True and oauth.load_tokens(config) is None, "logged out")
+    err(asyncio.run(h.mcp_call("list_businesses", {}, config=config)), "not_authenticated")
+    me = ok(asyncio.run(h.mcp_call("whoami", {}, config=config)))
+    expect(me["logged_in"] is False and me["error"]["code"] == "not_authenticated", "whoami")
+
+    # 5) a fresh login works again and the old refresh token is dead server-side
+    second = h.login(DEFAULT, config=config)
+    me = ok(asyncio.run(h.mcp_call("whoami", {}, config=config)))
+    expect(me["logged_in"] is True, "re-login works")
+    try:
+        oauth.refresh(config, dataclasses.replace(second, refresh_token=first.refresh_token))
+    except oauth.LoginError as exc:
+        old_refresh_rejected = "400" in str(exc) or "invalid_grant" in str(exc)
+    else:
+        old_refresh_rejected = False
+    expect(old_refresh_rejected, "an old refresh token must not mint new sessions")
+    return {"refresh_rotated": rotated, "old_refresh_rejected": old_refresh_rejected}
+
+
+@case("logout: revokes the refresh token at rai and deletes local credentials")
+def t_logout_revokes() -> Any:
+    config = cfg("logout", login_timeout=60.0)
+    oauth.clear_tokens(config)
+    tokens = h.login(DEFAULT, config=config)
+    out = ok(asyncio.run(h.mcp_call("logout", {}, config=config)))
+    expect(out["logged_out"] is True and oauth.load_tokens(config) is None, "cleared")
+    try:
+        oauth.refresh(config, tokens)
+    except oauth.LoginError as exc:
+        revoked = True
+        detail = str(exc)[:120]
+    else:
+        revoked = False
+        detail = "refresh still worked"
+    expect(revoked, f"refresh token still valid after logout: {detail}")
+    again = ok(asyncio.run(h.mcp_call("logout", {}, config=config)))
+    expect(again["logged_out"] is True, "logout twice is fine")
+    return {"detail": detail}
+
+
+# --------------------------------------------------------------------------------------------
+# rai's own surface as the client sees it, robustness, prompts, stdio process
+# --------------------------------------------------------------------------------------------
+
+
+@case("rai endpoints: no token -> not_authenticated, bad token -> login_expired, same envelope")
+def t_rai_bearer() -> Any:
+    config = session()
+    with httpx.Client(base_url=config.api_root, timeout=30) as http:
+        none = http.get("/whoami")
+        bad = http.get("/whoami", headers={"Authorization": "Bearer not-a-jwt"})
+        wrong_scheme = http.get("/whoami", headers={"Authorization": "Basic abc"})
+        tokens = oauth.current_tokens(config)
+        good = http.get(
+            "/businesses",
+            params={"query": "curiel"},
+            headers={"Authorization": f"Bearer {tokens.access_token if tokens else ''}"},
+        )
+    expect(none.status_code == 401 and none.json()["error"]["code"] == "not_authenticated", "none")
+    expect(bad.status_code == 401 and bad.json()["error"]["code"] == "login_expired", "bad")
+    expect(wrong_scheme.status_code == 401, f"basic scheme -> {wrong_scheme.status_code}")
+    expect(good.status_code == 200 and good.json()["businesses"][0]["business_id"] == BU, "good")
+    expect("www-authenticate" in {k.lower() for k in none.headers}, "WWW-Authenticate on 401")
+    return {"codes": [none.status_code, bad.status_code, wrong_scheme.status_code]}
+
+
+@case("rai authorize: unknown client, non-loopback redirect and bad PKCE method are rejected")
+def t_rai_authorize_validation() -> Any:
+    config = session()
+    base = {
+        "response_type": "code",
+        "client_id": config.client_id,
+        "redirect_uri": "http://127.0.0.1:5555/callback",
+        "scope": config.scopes,
+        "state": "s",
+        "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        "code_challenge_method": "S256",
+    }
+    with httpx.Client(base_url=config.rai_url, timeout=30, follow_redirects=False) as http:
+        good = http.get("/oauth/authorize", params=base)
+        unknown_client = http.get("/oauth/authorize", params={**base, "client_id": "evil"})
+        remote = http.get(
+            "/oauth/authorize", params={**base, "redirect_uri": "https://evil.example/callback"}
+        )
+        wrong_path = http.get(
+            "/oauth/authorize", params={**base, "redirect_uri": "http://127.0.0.1:5555/steal"}
+        )
+        plain = http.get("/oauth/authorize", params={**base, "code_challenge_method": "plain"})
+        meta = http.get("/.well-known/oauth-authorization-server")
+    expect(good.status_code in (302, 303, 307), f"valid request redirects: {good.status_code}")
+    expect(unknown_client.status_code == 400, f"unknown client {unknown_client.status_code}")
+    expect(remote.status_code == 400, f"remote redirect {remote.status_code}")
+    expect(wrong_path.status_code == 400, f"wrong path {wrong_path.status_code}")
+    expect(plain.status_code == 400, f"plain pkce {plain.status_code}")
+    m = meta.json()
+    expect(
+        "S256" in m.get("code_challenge_methods_supported", [])
+        and m["token_endpoint"].startswith(config.rai_url),
+        f"metadata {m}",
+    )
+    return {"idp_hop": good.headers.get("location", "")[:80]}
+
+
+@case("concurrency: 8 parallel report calls for different periods succeed")
+def t_concurrency() -> Any:
+    config = session()
+    periods = ["202601", "202602", "202603", "202604", "202605", "202606", "202607", "202608"]
+
+    async def burst() -> list[dict[str, Any]]:
+        return await asyncio.gather(
+            *[
+                h.mcp_call(
+                    "get_trial_balance", {"business_id": BU, "start_period_id": p}, config=config
+                )
+                for p in periods
+            ]
+        )
+
+    outs = asyncio.run(burst())
+    expect(
+        all(not o["is_error"] for o in outs),
+        f"errors: {[o['text'][:80] for o in outs if o['is_error']]}",
+    )
+    return {"periods": len(outs), "statuses": [o["structured_content"]["status"] for o in outs]}
+
+
+@case("robustness: wrong argument types and unknown arguments are rejected cleanly")
+def t_types() -> Any:
+    r1 = call("list_periods", {"business_id": 42})
+    r2 = call(
+        "get_trial_balance",
+        {"business_id": BU, "start_period_id": "202608", "only_detail_accounts": "yes please"},
+    )
+    r3 = call("list_businesses", {"unknown_argument": 1})
+    r4 = call(
+        "get_trial_balance", {"business_id": BU, "start_period_id": "202608", "max_rows": 10**9}
+    )
+    return {
+        "business_id_int": r1["is_error"],
+        "bool_as_text": r2["is_error"],
+        "unknown_arg": r3["is_error"],
+        "huge_max_rows_capped": (not r4["is_error"])
+        and r4["structured_content"]["row_count"] <= 200,
+        "texts": [r1["text"][:80], r2["text"][:80], r3["text"][:80]],
+    }
+
+
+@case("prompts: guidelines and navigation are served by the client")
+def t_prompts() -> Any:
+    from fastmcp import Client
+
+    from luca_mcp.server import create_server
+
+    async def run() -> dict[str, Any]:
+        async with Client(create_server(session()), timeout=30) as client:
+            prompts = await client.list_prompts()
+            names = [p.name for p in prompts]
+            got = await client.get_prompt("luca_navigation")
+            return {"names": names, "chars": len(str(got.messages[0].content))}
+
+    out = asyncio.run(run())
+    expect(set(out["names"]) >= {"luca_guidelines", "luca_navigation"}, f"prompts {out['names']}")
+    return out
+
+
+@case("stdio: the real `uv run luca-mcp` process answers whoami and a report")
+def t_stdio() -> Any:
+    config = session()
+    env = {
+        "LUCA_MCP_CONFIG_DIR": str(config.config_dir.resolve()),
+        "LUCA_RAI_URL": config.rai_url,
+        "LUCA_MCP_CREDENTIAL_STORE": "file",
+    }
+    me = ok(asyncio.run(h.mcp_call_stdio("whoami", {}, env=env)))
+    expect(me["logged_in"] and me["session"]["email"] == DEFAULT, "stdio whoami")
+    tb = ok(
+        asyncio.run(
+            h.mcp_call_stdio(
+                "get_trial_balance", {"business_id": BU, "start_period_id": "202608"}, env=env
+            )
+        )
+    )
+    expect(tb["status"] == "ready" and tb["row_count"] > 10, "stdio report")
+    return {"rows": tb["row_count"]}
+
+
+@case("stdio: without credentials every data tool says not_authenticated, whoami explains")
+def t_stdio_logged_out() -> Any:
+    empty_dir = ARTIFACTS / "config" / "empty"
+    empty_dir.mkdir(parents=True, exist_ok=True)
+    (empty_dir / "credentials.json").unlink(missing_ok=True)
+    env = {
+        "LUCA_MCP_CONFIG_DIR": str(empty_dir.resolve()),
+        "LUCA_RAI_URL": load_config().rai_url,
+        "LUCA_MCP_CREDENTIAL_STORE": "file",
+    }
+    e = err(asyncio.run(h.mcp_call_stdio("list_businesses", {}, env=env)), "not_authenticated")
+    expect("login" in (e.get("hint") or ""), "hint points to login")
+    me = ok(asyncio.run(h.mcp_call_stdio("whoami", {}, env=env)))
+    expect(me["logged_in"] is False and me["error"]["code"] == "not_authenticated", "whoami")
+    return {"hint": e.get("hint")}
+
+
 def run_suite() -> int:
     ordered = [
+        t_tools,
         t_whoami,
         t_businesses,
         t_business,
@@ -936,14 +1249,23 @@ def run_suite() -> int:
         t_seed_statuses,
         t_unknown_user,
         t_no_email,
+        t_disabled_user,
+        t_user_declines,
         t_restricted_user,
+        t_session_lifecycle,
+        t_logout_revokes,
+        t_rai_bearer,
+        t_rai_authorize_validation,
         t_concurrency,
         t_types,
         t_prompts,
+        t_stdio,
+        t_stdio_logged_out,
     ]
     only = None
     if len(sys.argv) > 2 and sys.argv[1] == "--only":
         only = sys.argv[2].lower()
+    print(f"rai: {load_config().rai_url}", flush=True)
     for test in ordered:
         if only and only not in test.__name__.lower():
             continue

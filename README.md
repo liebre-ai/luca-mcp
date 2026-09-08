@@ -1,59 +1,82 @@
 # Luca MCP
 
-A remote [Model Context Protocol](https://modelcontextprotocol.io) server that lets Claude Code,
-Codex, Cursor and claude.ai act on behalf of a logged-in Liebre user against the Liebre accounting
-API. Read-only today: it reads businesses, periods, journal entries, financial reports, VAT
-determination, SAT filings, SAT archives and documents, with the user's own permissions.
+The installable [Model Context Protocol](https://modelcontextprotocol.io) client for Luca, the
+accounting assistant of the Liebre platform. It runs on your machine over stdio, logs you in with
+your Liebre account through the browser, and gives Claude Code, Codex, Cursor and other MCP
+clients read-only tools over your businesses: periods, journal entries, financial reports, VAT
+determination, SAT filings, SAT archives and documents, always with your own permissions.
 
-Design: `docs/plans/2026-09-08-luca-mcp-plan.md` (reviewed in `docs/plans/2026-09-08-luca-mcp-plan-review.md`).
-Progress and verified facts: `docs/plans/2026-09-08-build-log.md`. Research: `docs/research/`.
+Design: `docs/plans/2026-09-08-v2-rai-auth-and-thin-client.md`. The server side lives in
+`ant-rai` (`src/endpoints/oauth` is the login server, `src/endpoints/mcp` the tool endpoints).
 
 ## How it works
 
 ```
-MCP client ──OAuth 2.1 (PKCE, CIMD/DCR, consent)──▶ Luca MCP ──user's Auth0 token──▶ Liebre API
-                                                       │
-                                                       └─ Auth0 (Universal Login) upstream
+agent ──stdio──▶ luca-mcp (this repo) ──bearer──▶ rai /api/v1/mcp/* ──machine token + User-Id──▶ Liebre API
+                     │
+                     └── login: browser → rai /oauth/authorize → Auth0 (Liebre login) → loopback callback
 ```
 
-- Luca MCP is the OAuth authorization server the MCP client talks to **and** a confidential
-  client of the Liebre Auth0 tenant. The user logs in through the normal Auth0 login. Their
-  Auth0 access and refresh tokens stay encrypted on the server; the client only ever holds a
-  Luca-issued reference token, which each tool call swaps for the user's real token before
-  calling the Liebre API (`Authorization: Bearer` + `Accounting-Firm-ID`).
-- Built on `fastmcp` 4.0.3 (`OIDCProxy`) with a few overrides (real revocation, pinned refresh
-  scopes, RFC 8707 resource check, root protected-resource metadata). See `src/luca_mcp/auth.py`.
-- Streamable HTTP at `/mcp`, stateless, JSON responses; serves both the legacy and the
-  2026-07-28 protocol revisions.
+- **Login** is OAuth 2.1 authorization code with PKCE against rai's own authorization server.
+  The client is the pre-registered public client `luca-mcp`; it listens once on
+  `http://127.0.0.1:<random port>/callback` for the round trip (RFC 8252). rai authenticates you
+  through the Liebre Auth0 tenant and only accepts an e-mail that is an active Liebre account.
+- **Credentials**: rai issues a 30-minute access token and a rotating refresh token. They are kept
+  in the OS keychain (macOS Keychain, Windows Credential Manager, Secret Service) with a file
+  fallback at `~/.config/luca-mcp/credentials.json` (mode 0600). Nothing from Auth0 ever reaches
+  your machine. Tokens refresh automatically; `logout` revokes them.
+- **Access control** happens in rai on every call: your e-mail is resolved to your Liebre account,
+  the account must be active, and the business must be linked to you with `allowed` status. rai
+  then calls the Liebre API with its machine token and your `User-Id`. Deleted businesses are
+  hidden.
+- **Tool logic** (shapes, validation, hints) lives in rai; this client is thin on purpose so
+  everyone gets fixes without reinstalling.
 
-## Connect a client
+## Install and connect
 
-The canonical URL is `https://<host>/mcp` (no trailing slash). Dev (once deployed):
-`https://mcp-dev.liebre.ai/mcp`. Locally: `http://localhost:8765/mcp`.
+Requires [uv](https://docs.astral.sh/uv/) (Python 3.12 is fetched automatically) and access to
+the repository.
 
 ```bash
-# Claude Code
-claude mcp add --transport http luca https://mcp-dev.liebre.ai/mcp   # -s user to make it global
-claude mcp login luca            # or /mcp inside a session; browser -> Liebre login -> consent
-claude mcp logout luca           # disconnect (revokes the session server-side)
+# Claude Code (add -s user to make it available in every project)
+claude mcp add luca -- uvx --from git+https://github.com/liebre-ai/luca-mcp luca-mcp
 
-# Codex CLI
-codex mcp add luca --url https://mcp-dev.liebre.ai/mcp
-codex mcp login luca
+# Codex CLI (then raise its 60 s per-tool timeout so `login` can wait for the browser:
+# in ~/.codex/config.toml under [mcp_servers.luca] add `tool_timeout_sec = 300`)
+codex mcp add luca -- uvx --from git+https://github.com/liebre-ai/luca-mcp luca-mcp
 ```
 
-Cursor: add `{ "mcpServers": { "luca": { "url": "https://mcp-dev.liebre.ai/mcp" } } }` to
-`~/.cursor/mcp.json` and connect. claude.ai / Claude Desktop: Settings → Connectors → Add custom
-connector with the URL exactly as above.
+Cursor and other clients: add to your MCP settings
 
-Start with the `luca_guidelines` and `luca_navigation` prompts, then `list_businesses`.
+```json
+{ "mcpServers": { "luca": { "command": "uvx",
+    "args": ["--from", "git+https://github.com/liebre-ai/luca-mcp", "luca-mcp"] } } }
+```
 
-## Tools (all read-only)
+Then either ask the agent to call the `login` tool, or run it yourself:
+
+```bash
+uvx --from git+https://github.com/liebre-ai/luca-mcp luca-mcp login    # opens the browser
+uvx --from git+https://github.com/liebre-ai/luca-mcp luca-mcp status   # who am I, which server
+uvx --from git+https://github.com/liebre-ai/luca-mcp luca-mcp logout   # revoke + forget
+```
+
+The client talks to the dev Luca server by default. Point it elsewhere with `LUCA_RAI_URL`
+(for example `http://localhost:3030` for a local rai), passed as an env entry in the MCP config.
+
+Start a session with the `luca_guidelines` and `luca_navigation` prompts, then `list_businesses`.
+
+## Tools
+
+Session: `login` (opens the browser, blocks until done), `logout`, `whoami` (never fails: says
+whether you are logged in, who you are, which firms and businesses you can use, and which server
+the client talks to).
+
+Data tools, all read-only and annotated as such:
 
 | Tool | What it returns |
 |---|---|
-| `whoami` | Login identity, upstream login expiry, MCP client, server build, and the firms/businesses the user can access (`access.error` when they cannot be listed). |
-| `list_businesses(query?, limit?, offset?)` | Businesses the user may act on, favourites first; filter by id, name or RFC. |
+| `list_businesses(query?, limit?, offset?)` | Businesses you may act on, favourites first; filter by id, name or RFC. |
 | `get_business(business_id)` | Profile: names, RFC, fiscal regime, currency, status, last open period. |
 | `list_periods(business_id, year?)` | Periods (`YYYYMM`, 13 = annual close) with status and validation status; `last_open_period`. |
 | `get_trial_balance(business_id, start_period_id, end_period_id?, levels_deep?, only_detail_accounts?, include_zero_balances?, include_pending_entries?, signed_balances?, max_rows?)` | Balanza de comprobación, rows flattened with `depth`, capped. |
@@ -70,78 +93,62 @@ Start with the `luca_guidelines` and `luca_navigation` prompts, then `list_busin
 | `get_document(business_id, document_id)` | Metadata and a short-lived signed `download_url`. |
 
 Every business-scoped tool accepts an optional `accounting_firm_id` for users whose business is
-linked to more than one firm. `business_id` values are validated against the user's own access
-list before any Liebre call.
+linked to more than one firm. Identifiers are validated locally (one URL segment, no slashes or
+whitespace) and then against your own access list in rai before any Liebre call.
 
 ### Errors
 
 Tools fail with an `isError` result whose text is a JSON envelope
-`{"error": {"code", "message", "hint", "platform_url"?, "details"?, "build"?}}`. Codes:
-`not_authenticated`, `no_email_claim`, `login_expired` (run `/mcp` and log in again),
-`forbidden` (Liebre role lacks the permission), `not_found`, `invalid_input`, `unknown_business`,
-`ambiguous_firm`, `conflict`, `upstream_unavailable` (retry later), `upstream_error`,
-`not_supported`. Type errors on arguments are rejected by the schema before the tool runs.
+`{"error": {"code", "message", "hint"?, "platform_url"?, "details"?}}`, produced by rai and
+passed through verbatim. Codes: `not_authenticated` (call `login`), `login_expired` (call
+`login` again), `forbidden` (inactive account), `not_found`, `invalid_input`, `unknown_business`
+(the id is not among your businesses; the hint lists them), `ambiguous_firm`, `conflict`,
+`upstream_unavailable` (rai unreachable; retry later), `upstream_error`. Argument type errors are
+rejected by the tool schema before anything runs.
 
 ### Limits
 
 Lists are capped at 200 rows per page; the trial balance at `max_rows` (default 200, max 1000);
-SAT archive `details` at `max_detail_rows` (default 100). Each tool has a 60-second budget with
-30-second Liebre calls and three retries on 429/5xx. Reports that answer `status: "processing"`
-are polled three times, then returned as-is with a hint.
+SAT archive `details` at `max_detail_rows` (default 100). Reports that answer
+`status: "processing"` are polled by rai a few times, then returned as-is with a hint.
 
 ## Development
 
 ```bash
-uv sync                                   # Python 3.12, fastmcp 4.0.3 pinned
-cp .env.example .env                      # then set real keys (see the file)
-./dev/run_local.sh                        # starts the dev mock IdP (:9400) and the server (:8765)
-uv run python tests/e2e/harness.py login  # scripted OAuth dance; stores a session in .e2e-artifacts/
+uv sync                                    # Python 3.12, fastmcp 4.0.3 pinned
+./dev/run_local.sh                         # dev mock IdP (:9400) standing in for Auth0
+# ant-rai: `uv run fastapi dev src/main.py --port 3030` with MCP_OAUTH_IDP=auth0,
+#          MCP_AUTH0_DOMAIN=http://localhost:9400, MCP_AUTH0_CLIENT_ID=luca-rai-dev, MCP_AUTH0_CLIENT_SECRET=...
+export LUCA_RAI_URL=http://localhost:3030 LUCA_MCP_CREDENTIAL_STORE=file LUCA_MCP_CONFIG_DIR=.e2e-artifacts/config
+uv run python tests/e2e/harness.py login   # scripted browser through rai and the mock IdP
 uv run python tests/e2e/harness.py tools
 uv run python tests/e2e/harness.py call get_trial_balance '{"business_id":"bu-2","start_period_id":"202608"}'
-uv run python tests/e2e/harness.py auth-suite   # 17 authentication edge cases
-uv run python tests/e2e/tools_suite.py          # 23 tool cases against dev bu-2 (use --only <substring>)
-uv run python tests/e2e/expiry_suite.py         # token lifetimes: expiry, client refresh, transparent upstream refresh
-uv run python tests/e2e/claude_code_login.py <project_dir>   # real Claude Code CLI login (see file docstring)
-uv run python tests/e2e/codex_login.py                       # real Codex CLI login (after `codex mcp add luca --url ...`)
+uv run python tests/e2e/harness.py call whoami '{}' --stdio   # same, through `uv run luca-mcp`
+uv run python tests/e2e/tools_suite.py     # 36 cases against dev bu-2 (use --only <substring>)
 ```
 
-`dev/mock_idp.py` is a **dev-only** OpenID provider that stands in for Auth0 until the real
-"Luca MCP" Auth0 application exists. It mints Auth0-shaped RS256 tokens for synthetic dev
-identities (default `ygreen@company.com`, the account the API repo's fixtures use), which the dev
-Liebre API accepts because it resolves users by the `email` claim. It has no real authentication
-and must never be deployed. Switching to Auth0 is configuration only (`AUTH0_*` variables).
+`.mcp.json` registers this checkout as `luca-dev` for Claude Code (`uv run luca-mcp` against the
+local rai). `dev/mock_idp.py` is a **dev-only** OpenID provider that stands in for Auth0 in
+rai's `MCP_AUTH0_DOMAIN`; it has no real authentication and must never be deployed. The seeded
+bu-2 fixtures the suite checks are described in `tests/e2e/fixtures/bu-2-seed-manifest.json`.
 
-Logs: `.e2e-artifacts/server.log`, `.e2e-artifacts/mock_idp.log`. Nothing under `.e2e-artifacts/`
-is committed.
+Nothing under `.e2e-artifacts/` is committed.
 
 ## Configuration
 
-See `.env.example`. Required: `LUCA_MCP_BASE_URL`, `LIEBRE_API_BASE_URL`, `LIEBRE_APP_BASE_URL`,
-`AUTH0_CONFIG_URL`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_AUDIENCE`,
-`LUCA_MCP_JWT_SIGNING_KEY` (32+ random bytes), `LUCA_MCP_STORAGE_KEY` (Fernet key). Optional:
-`REDIS_URL` (shared OAuth state store; required before running more than one instance),
-`LUCA_MCP_ALLOWED_REDIRECT_URIS`, `LUCA_MCP_ADVERTISED_SCOPES`, `LUCA_MCP_CONSENT_MODE`
-(`always` | `remember` | `off`, `off` only in local/dev), `LUCA_MCP_ACCESS_TOKEN_TTL_SECONDS`,
-`LOG_LEVEL`.
+All optional, see `.env.example`: `LUCA_RAI_URL`, `LUCA_MCP_CLIENT_ID`, `LUCA_MCP_TIMEOUT`,
+`LUCA_MCP_LOGIN_TIMEOUT`, `LUCA_MCP_CONFIG_DIR`, `LUCA_MCP_CREDENTIAL_STORE` (`auto` | `file`;
+`file` skips the OS keychain for CI and headless machines).
 
-Auth0 application the real deployment needs (dev tenant first): Regular Web Application,
-first-party, `client_secret_post`, grants `authorization_code` + `refresh_token`, callback
-`https://<host>/auth/callback`, refresh-token rotation and expiration on; on the Liebre API:
-"Allow Offline Access" and "Allow Skipping User Consent"; the post-login Action must put `email`
-on **access** tokens.
-
-## Deployment
-
-`Dockerfile` + `docker-entrypoint.sh` (uvicorn behind Cloud Run's TLS termination). Tag-driven
-GitLab pipeline in `.gitlab-ci.yml` mirrored from the sibling services; `.github/workflows/version.yml`
-creates the `vX.Y.Z` tags. Beta topology: one Cloud Run instance (`--min-instances=1
---max-instances=1 --concurrency=20`) with the in-memory state store; set `REDIS_URL` before
-scaling out. The server must run with `--allow-unauthenticated` at the Cloud Run layer: OAuth is
-enforced in-app.
+Server-side settings (ant-rai): `MCP_OAUTH_IDP=auth0`, `MCP_AUTH0_DOMAIN`, `MCP_AUTH0_CLIENT_ID`,
+`MCP_AUTH0_CLIENT_SECRET`, `MCP_OAUTH_ALLOWED_CLIENT_IDS` (default `claude-code,luca-mcp`). The
+Auth0 application rai needs: Regular Web Application, callback `https://<rai>/oauth/callback`,
+scopes `openid email profile`.
 
 ## Status and known limitations
 
-- Dev-only until the Auth0 application exists and the Liebre API verifies token signatures
-  (tracked in the plan's asks).
+- Dev: works against the local rai and dev Liebre. The dev rai deployment needs the Auth0
+  application and the `MCP_*` settings before the default `LUCA_RAI_URL` works for everyone.
+- Read-only; write tools are planned, not built. Excluded operations answer with a link to the
+  platform.
 - Deep links point to the platform root until the frontend routes are confirmed.
-- Financial statement exports (XLSX) and write tools are planned, not built.

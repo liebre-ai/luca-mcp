@@ -52,7 +52,7 @@ ACCESS_TTL = int(os.getenv("MOCK_IDP_ACCESS_TTL", "86400"))
 REFRESH_TTL = int(os.getenv("MOCK_IDP_REFRESH_TTL", str(30 * 24 * 3600)))
 ALLOWED_REDIRECTS = [
     u.strip()
-    for u in os.getenv("MOCK_IDP_ALLOWED_REDIRECTS", "http://localhost:8765/auth/callback").split(
+    for u in os.getenv("MOCK_IDP_ALLOWED_REDIRECTS", "http://localhost:3030/oauth/callback").split(
         ","
     )
     if u.strip()

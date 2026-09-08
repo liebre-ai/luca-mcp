@@ -1,3 +1,3 @@
-"""Luca MCP: Liebre accounting for AI agents."""
+"""Luca MCP client: Liebre accounting tools for MCP agents, backed by ant-rai."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
