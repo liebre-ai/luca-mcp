@@ -178,10 +178,12 @@ def t_tools() -> Any:
     }
     expect(names == expected, f"tool names differ: {sorted(names ^ expected)}")
     data_tools = [t for t in tools if t["name"] not in ("login", "logout")]
-    expect(
-        all((t.get("annotations") or {}).get("readOnlyHint") is True for t in data_tools),
-        "every data tool is annotated read-only",
-    )
+
+    def read_only(tool: dict[str, Any]) -> bool:  # fastmcp's model dumps snake_case
+        ann = tool.get("annotations") or {}
+        return ann.get("readOnlyHint", ann.get("read_only_hint")) is True
+
+    expect(all(read_only(t) for t in data_tools), "every data tool is annotated read-only")
     expect(all((t.get("description") or "").strip() for t in tools), "every tool has a description")
     return {"count": len(tools)}
 
@@ -254,7 +256,14 @@ def t_scoping() -> Any:
     e = err(call("get_business", {"business_id": "bu-999999999"}), "unknown_business")
     expect("list_businesses" in (e.get("hint") or ""), "hint mentions list_businesses")
     err(call("get_business", {"business_id": "'; DROP TABLE business; --"}), "unknown_business")
-    err(call("get_business", {"business_id": "../../accounting_firms"}), "unknown_business")
+    # ids that could change the request path never leave the client
+    for traversal in ("../../accounting_firms", "bu-2/periods", "bu-2?x=1", "bu-2#f", "bu 2"):
+        e = err(call("get_business", {"business_id": traversal}), "invalid_input")
+        expect("business_id" in e["message"], f"names the argument: {e['message']}")
+    err(
+        call("get_journal_entry", {"business_id": BU, "journal_entry_id": "../periods/202608"}),
+        "invalid_input",
+    )
     err(call("get_business", {"business_id": ""}), "invalid_input")
     err(
         call("get_business", {"business_id": BU, "accounting_firm_id": "af-999"}),

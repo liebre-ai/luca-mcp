@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
+from urllib.parse import quote
 
 from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from luca_mcp import __version__, oauth
-from luca_mcp.api import LucaError, RaiClient
+from luca_mcp.api import NOT_LOGGED_IN, LucaError, RaiClient
 from luca_mcp.config import Config, load_config
 from luca_mcp.prompts import luca as prompts
 
@@ -39,6 +41,36 @@ Amounts are numbers in the business currency, exactly as Liebre reports them.
 Luca is read-only: it cannot create or change journal entries, periods, accounts, credentials or
 filings. When a user asks for a change, say so plainly and point them to the Liebre platform link
 returned by the tools. Never guess a business_id: call `list_businesses`."""
+
+
+_SEGMENT_FORBIDDEN = re.compile(r"[\s/\\?#%]")
+
+
+def _segment(value: Any, name: str) -> str:
+    """An identifier that becomes one path segment of the rai URL. Anything that could change the
+    path (slashes, whitespace, query/fragment characters, dot-segments) is rejected here with a
+    clear message instead of turning into a request for a different route."""
+    if not isinstance(value, str) or not value.strip():
+        raise LucaError(
+            {
+                "error": {
+                    "code": "invalid_input",
+                    "message": f"{name} is required and must be a non-empty string.",
+                }
+            }
+        )
+    text = value.strip()
+    if _SEGMENT_FORBIDDEN.search(text) or text.startswith("."):
+        raise LucaError(
+            {
+                "error": {
+                    "code": "invalid_input",
+                    "message": f"{name} {text[:40]!r} is not a valid identifier.",
+                    "hint": "Use an id exactly as returned by the listing tools.",
+                }
+            }
+        )
+    return quote(text, safe="")
 
 
 def create_server(config: Config | None = None) -> FastMCP:
@@ -89,7 +121,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         if tokens:
             await asyncio.to_thread(oauth.revoke, config, tokens)
         oauth.clear_tokens(config)
-        return {"logged_in": False, "rai_url": config.rai_url}
+        return {"logged_out": True, "logged_in": False, "rai_url": config.rai_url}
 
     @mcp.tool(name="whoami", annotations=READ_ONLY)
     async def whoami() -> dict[str, Any]:
@@ -101,7 +133,7 @@ def create_server(config: Config | None = None) -> FastMCP:
                 "logged_in": False,
                 "rai_url": config.rai_url,
                 "client_version": __version__,
-                "hint": "Call the `login` tool (or run `luca-mcp login`) to log in with your Liebre account.",
+                **NOT_LOGGED_IN,
             }
         try:
             me = await get("/whoami")
@@ -138,7 +170,10 @@ def create_server(config: Config | None = None) -> FastMCP:
     async def get_business(business_id: str, accounting_firm_id: str | None = None) -> Any:
         """Profile of one business: legal/commercial name, RFC, fiscal regime, currency, status,
         creation date and its last open period. Confirm the company before reporting figures."""
-        return await get(f"/businesses/{business_id}", accounting_firm_id=accounting_firm_id)
+        return await get(
+            f"/businesses/{_segment(business_id, 'business_id')}",
+            accounting_firm_id=accounting_firm_id,
+        )
 
     @mcp.tool(name="list_periods", annotations=READ_ONLY)
     async def list_periods(
@@ -153,7 +188,9 @@ def create_server(config: Config | None = None) -> FastMCP:
         the list (Liebre returns a 13-period calendar for any year; look at `open_periods`).
         """
         return await get(
-            f"/businesses/{business_id}/periods", year=year, accounting_firm_id=accounting_firm_id
+            f"/businesses/{_segment(business_id, 'business_id')}/periods",
+            year=year,
+            accounting_firm_id=accounting_firm_id,
         )
 
     # ------------------------------------------------------------------------------------------
@@ -183,7 +220,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         `status: "processing"` means Liebre is still recomputing balances; retry in a moment.
         """
         return await get(
-            f"/businesses/{business_id}/reports/trial_balance",
+            f"/businesses/{_segment(business_id, 'business_id')}/reports/trial_balance",
             start_period_id=start_period_id,
             end_period_id=end_period_id,
             levels_deep=levels_deep,
@@ -206,7 +243,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         range with `end_period_id`. Returns assets, liabilities and equity as sections with line
         items, both totals and `balanced` (assets equal liabilities plus equity within one cent)."""
         return await get(
-            f"/businesses/{business_id}/reports/balance_sheet",
+            f"/businesses/{_segment(business_id, 'business_id')}/reports/balance_sheet",
             start_period_id=start_period_id,
             end_period_id=end_period_id,
             accounting_firm_id=accounting_firm_id,
@@ -224,7 +261,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         otros_ingresos_gastos, utilidad_antes_rif, rif, utilidad_neta_ejercicio, with line items.
         Liebre may label the column year-to-date (e.g. "YTD-2026")."""
         return await get(
-            f"/businesses/{business_id}/reports/income_statement",
+            f"/businesses/{_segment(business_id, 'business_id')}/reports/income_statement",
             start_period_id=start_period_id,
             end_period_id=end_period_id,
             accounting_firm_id=accounting_firm_id,
@@ -243,7 +280,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         Compare with the SAT declaration for the same month from `list_declaraciones` /
         `get_sat_archive`."""
         return await get(
-            f"/businesses/{business_id}/taxes/vat/{period_id}",
+            f"/businesses/{_segment(business_id, 'business_id')}/taxes/vat/{_segment(period_id, 'period_id')}",
             include_pending_entries=include_pending_entries,
             accounting_firm_id=accounting_firm_id,
         )
@@ -265,7 +302,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         `get_journal_entry` for the lines. Paged with `limit` (max 200) and `offset`. To filter by
         status, type or date within one period use `list_journal_entries_for_period`."""
         return await get(
-            f"/businesses/{business_id}/journal_entries/search",
+            f"/businesses/{_segment(business_id, 'business_id')}/journal_entries/search",
             q=q,
             limit=limit,
             offset=offset,
@@ -294,7 +331,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         whole period before filtering. Sorted by date then number; compact rows.
         """
         return await get(
-            f"/businesses/{business_id}/periods/{period_id}/journal_entries",
+            f"/businesses/{_segment(business_id, 'business_id')}/periods/{_segment(period_id, 'period_id')}/journal_entries",
             status=status,
             journal_entry_type=journal_entry_type,
             date_from=date_from,
@@ -314,7 +351,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         CFDIs, and `balance_check` (debits equal credits). `journal_entry_id` is the UUID from
         search/list results."""
         return await get(
-            f"/businesses/{business_id}/journal_entries/{journal_entry_id}",
+            f"/businesses/{_segment(business_id, 'business_id')}/journal_entries/{_segment(journal_entry_id, 'journal_entry_id')}",
             accounting_firm_id=accounting_firm_id,
         )
 
@@ -331,7 +368,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         not_applicable), the primary filing when known (date, folio, amount paid, acuse link that
         expires within minutes) and the number of complementary filings."""
         return await get(
-            f"/businesses/{business_id}/declaraciones",
+            f"/businesses/{_segment(business_id, 'business_id')}/declaraciones",
             year=year,
             accounting_firm_id=accounting_firm_id,
         )
@@ -352,7 +389,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         (year/month), status (processing, completed, failed), document and evidence counts.
         `available_types` lists valid `extraction_type` values. Dates are YYYY-MM-DD."""
         return await get(
-            f"/businesses/{business_id}/sat_archives",
+            f"/businesses/{_segment(business_id, 'business_id')}/sat_archives",
             extraction_type=extraction_type,
             status=status,
             requested_from=requested_from,
@@ -381,7 +418,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         per supplier, capped at `max_detail_rows`). `include_extracted_data=false` returns metadata
         and files only."""
         return await get(
-            f"/businesses/{business_id}/sat_archives/{sat_archive_id or 'latest'}",
+            f"/businesses/{_segment(business_id, 'business_id')}/sat_archives/{_segment(sat_archive_id, 'sat_archive_id') if sat_archive_id else 'latest'}",
             extraction_type=extraction_type,
             include_extracted_data=include_extracted_data,
             max_detail_rows=max_detail_rows,
@@ -402,7 +439,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         Filters: `document_type` (see `available_types`), `year`, `month`. Use `get_document` for a
         temporary download link."""
         return await get(
-            f"/businesses/{business_id}/documents",
+            f"/businesses/{_segment(business_id, 'business_id')}/documents",
             document_type=document_type,
             year=year,
             month=month,
@@ -418,7 +455,7 @@ def create_server(config: Config | None = None) -> FastMCP:
         """Metadata and a temporary signed download link (expires within minutes) for one stored
         fiscal document (PDF/XLSX/XML). Call again for a fresh link."""
         return await get(
-            f"/businesses/{business_id}/documents/{document_id}",
+            f"/businesses/{_segment(business_id, 'business_id')}/documents/{_segment(document_id, 'document_id')}",
             accounting_firm_id=accounting_firm_id,
         )
 
