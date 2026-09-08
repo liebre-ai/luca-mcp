@@ -155,3 +155,53 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             "last_open_period": last_open,
             "platform_url": platform_url(settings, ref.business_id),
         }
+
+    @mcp.tool(name="get_business", annotations=READ_ONLY)
+    async def get_business(
+        business_id: str,
+        accounting_firm_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Profile of one business: legal/commercial name, RFC, fiscal regime, currency, status,
+        creation date and its last open period.
+
+        Use it to confirm you are looking at the right company before reporting figures.
+        """
+        client, ref = await business_scope(settings, business_id, accounting_firm_id)
+        base = f"/businesses/{ref.business_id}"
+        body = await client.get(
+            base, firm_id=ref.accounting_firm_id, what=f"business {ref.business_id}"
+        )
+        body = body if isinstance(body, dict) else {}
+        localized = body.get("localized_data") or {}
+        last_open: dict[str, Any] | None = None
+        try:
+            lo = await client.get(
+                f"{base}/periods/last_open", firm_id=ref.accounting_firm_id, what="last open period"
+            )
+            if isinstance(lo, dict) and lo.get("period_id"):
+                last_open = {
+                    "period_id": str(lo["period_id"]),
+                    "status": lo.get("period_status"),
+                    "validation_status": lo.get("period_validation_status"),
+                }
+        except Exception:
+            last_open = None
+        return {
+            "business_id": body.get("business_id", ref.business_id),
+            "accounting_firm_id": ref.accounting_firm_id,
+            "legal_name": body.get("legal_name"),
+            "commercial_name": body.get("commercial_name"),
+            "tax_id": body.get("tax_id"),
+            "business_type": body.get("business_type"),
+            "status": body.get("status"),
+            "country_code": body.get("country_code"),
+            "currency": body.get("currency"),
+            "creation_date": body.get("creation_date"),
+            "fiscal_regime": {
+                "code": localized.get("regimen_fiscal_codigo"),
+                "name": localized.get("regimen_fiscal_nombre"),
+            },
+            "postal_code": localized.get("código_postal") or localized.get("codigo_postal"),
+            "last_open_period": last_open,
+            "platform_url": platform_url(settings, ref.business_id),
+        }

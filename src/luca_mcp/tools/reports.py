@@ -1,4 +1,4 @@
-"""Financial reports: trial balance, VAT determination (more to come)."""
+"""Financial reports: trial balance, balance sheet, income statement, VAT determination."""
 
 from __future__ import annotations
 
@@ -48,6 +48,14 @@ def _validate_levels_deep(value: Any) -> str:
     )
 
 
+def _validate_range(start_period_id: Any, end_period_id: Any) -> tuple[str, str | None]:
+    start = validate_period(start_period_id, "start_period_id")
+    end = validate_period(end_period_id, "end_period_id", allow_none=True)
+    if end and end < start:
+        raise LucaToolError(INVALID_INPUT, "end_period_id must not be before start_period_id.")
+    return start, end
+
+
 def flatten_accounts(
     rows: list[dict[str, Any]],
     *,
@@ -85,12 +93,34 @@ def flatten_accounts(
     return out
 
 
+def _sections(block: Any) -> dict[str, Any]:
+    """Compact a {total, sub_sections:[{sub_section_name,total,details:[{name,amount}]}]} block."""
+    if not isinstance(block, dict):
+        return {"total": block, "sections": []}
+    return {
+        "total": block.get("total"),
+        "sections": [
+            {
+                "name": section.get("sub_section_name"),
+                "total": section.get("total"),
+                "lines": [
+                    {"name": d.get("name"), "amount": d.get("amount")}
+                    for d in (section.get("details") or [])
+                    if isinstance(d, dict)
+                ],
+            }
+            for section in (block.get("sub_sections") or [])
+            if isinstance(section, dict)
+        ],
+    }
+
+
 def register(mcp: FastMCP, settings: Settings) -> None:
     @mcp.tool(name="get_trial_balance", annotations=READ_ONLY)
     async def get_trial_balance(
         business_id: str,
-        start_period_id: str,
-        end_period_id: str | None = None,
+        start_period_id: str | int,
+        end_period_id: str | int | None = None,
         levels_deep: str = "1",
         only_detail_accounts: bool = False,
         include_zero_balances: bool = False,
@@ -109,10 +139,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         (`truncated: true` tells you to narrow the request). `status: "processing"` means Liebre
         is still recomputing balances; retry in a moment.
         """
-        start = validate_period(start_period_id, "start_period_id")
-        end = validate_period(end_period_id, "end_period_id", allow_none=True)
-        if end and end < start:
-            raise LucaToolError(INVALID_INPUT, "end_period_id must not be before start_period_id.")
+        start, end = _validate_range(start_period_id, end_period_id)
         levels = _validate_levels_deep(levels_deep)
         cap = validate_limit(max_rows, "max_rows", default=MAX_ROWS, cap=1000)
         client, ref = await business_scope(settings, business_id, accounting_firm_id)
@@ -171,10 +198,112 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             )
         return result
 
+    @mcp.tool(name="get_balance_sheet", annotations=READ_ONLY)
+    async def get_balance_sheet(
+        business_id: str,
+        start_period_id: str | int,
+        end_period_id: str | int | None = None,
+        accounting_firm_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Balance sheet (estado de situación financiera) of a business at the end of a period.
+
+        `start_period_id` is the period (`YYYYMM`); with `end_period_id` Liebre reports the range.
+        Returns assets, liabilities and equity as sections with their line items, the two totals,
+        and `balanced` (assets equal liabilities plus equity within one cent). `status:
+        "processing"` means balances are being recomputed; retry in a moment.
+        """
+        start, end = _validate_range(start_period_id, end_period_id)
+        client, ref = await business_scope(settings, business_id, accounting_firm_id)
+        body, polls = await get_report_with_polling(
+            client,
+            f"/businesses/{ref.business_id}/reports/balance_sheet",
+            firm_id=ref.accounting_firm_id,
+            params={"start_period_id": start, "end_period_id": end},
+            what=f"balance sheet of {ref.business_id} {start}",
+        )
+        body = body if isinstance(body, dict) else {}
+        sheet = body.get("balance_sheet") or {}
+        total_assets = sheet.get("total_assets")
+        total_le = sheet.get("total_liabilities_equity")
+        balanced = None
+        if isinstance(total_assets, int | float) and isinstance(total_le, int | float):
+            balanced = abs(total_assets - total_le) < 0.005
+        result: dict[str, Any] = {
+            "business_id": ref.business_id,
+            "start_period_id": start,
+            "end_period_id": end or start,
+            "status": body.get("status", "ready"),
+            "date": sheet.get("date"),
+            "assets": _sections(sheet.get("assets")),
+            "liabilities": _sections(sheet.get("liabilities")),
+            "equity": _sections(sheet.get("equity")),
+            "total_assets": total_assets,
+            "total_liabilities_equity": total_le,
+            "balanced": balanced,
+            "periods": body.get("periods"),
+            "platform_url": platform_url(settings, ref.business_id),
+        }
+        if body.get("status") == "processing":
+            result["hint"] = (
+                f"Liebre is still recomputing balances (polled {polls} times). Retry in a minute."
+            )
+        return result
+
+    @mcp.tool(name="get_income_statement", annotations=READ_ONLY)
+    async def get_income_statement(
+        business_id: str,
+        start_period_id: str | int,
+        end_period_id: str | int | None = None,
+        accounting_firm_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Income statement (estado de resultados) of a business for a period or a range.
+
+        Sections: ingresos (revenue), costo_ventas (cost of sales), utilidad_bruta (gross profit),
+        gastos_operacion (operating expenses), utilidad_operacion, otros_ingresos_gastos,
+        utilidad_antes_rif, rif (financing result), utilidad_neta_ejercicio (net profit), with
+        line items per section. Liebre may label the column year-to-date (e.g. "YTD-2026").
+        Periods are `YYYYMM`.
+        """
+        start, end = _validate_range(start_period_id, end_period_id)
+        client, ref = await business_scope(settings, business_id, accounting_firm_id)
+        body = await client.get(
+            f"/businesses/{ref.business_id}/reports/income_statement",
+            firm_id=ref.accounting_firm_id,
+            params={"start_period_id": start, "end_period_id": end},
+            what=f"income statement of {ref.business_id} {start}-{end or start}",
+        )
+        body = body if isinstance(body, dict) else {}
+        statements = []
+        for column in body.get("income_statement") or []:
+            if not isinstance(column, dict):
+                continue
+            statements.append(
+                {
+                    "period": column.get("period"),
+                    "ingresos": _sections(column.get("ingresos")),
+                    "costo_ventas": _sections(column.get("costo_ventas")),
+                    "utilidad_bruta": column.get("utilidad_bruta"),
+                    "gastos_operacion": _sections(column.get("gastos_operacion")),
+                    "utilidad_operacion": column.get("utilidad_operacion"),
+                    "otros_ingresos_gastos": _sections(column.get("otros_ingresos_gastos")),
+                    "utilidad_antes_rif": column.get("utilidad_antes_rif"),
+                    "rif": _sections(column.get("rif")),
+                    "utilidad_neta_ejercicio": column.get("utilidad_neta_ejercicio"),
+                    "unassigned_section": column.get("unassigned_section"),
+                }
+            )
+        return {
+            "business_id": ref.business_id,
+            "start_period_id": start,
+            "end_period_id": end or start,
+            "statements": statements,
+            "platform_url": platform_url(settings, ref.business_id),
+        }
+
     @mcp.tool(name="get_vat_determination", annotations=READ_ONLY)
     async def get_vat_determination(
         business_id: str,
-        period_id: str,
+        period_id: str | int,
         include_pending_entries: bool = False,
         accounting_firm_id: str | None = None,
     ) -> dict[str, Any]:
@@ -183,7 +312,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         Returns VAT collected, creditable, withheld, payable / in favour, and warnings such as
         `missing_vat_accounts` when the chart of accounts has no account of the needed VAT type
         (figures are then zero, not "no VAT"). Compare with the SAT declaration for the same
-        month from `list_declaraciones`. `period_id` is `YYYYMM`.
+        month from `list_declaraciones` / `get_sat_archive`. `period_id` is `YYYYMM`.
         """
         period = validate_period(period_id)
         client, ref = await business_scope(settings, business_id, accounting_firm_id)
