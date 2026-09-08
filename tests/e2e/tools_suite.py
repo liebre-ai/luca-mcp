@@ -770,6 +770,147 @@ def t_restricted_user() -> Any:
     return {"total_visible": listing["total"], "rows": tb["row_count"]}
 
 
+SEED_MANIFEST = Path(__file__).parent / "fixtures" / "bu-2-seed-manifest.json"
+
+
+def seeded() -> dict[str, dict[str, Any]]:
+    manifest = json.loads(SEED_MANIFEST.read_text())
+    return {c["label"]: c for c in manifest["cases"]}
+
+
+@case("seeded: 60-line entry resolves every account and balances")
+def t_seed_many_lines() -> Any:
+    entry = seeded()["many-lines-60"]
+    s = ok(
+        call(
+            "get_journal_entry", {"business_id": BU, "journal_entry_id": entry["journal_entry_id"]}
+        )
+    )
+    expect(s["line_count"] == 60, f"line_count {s['line_count']}")
+    expect(
+        s["balance_check"]["balanced"] and s["balance_check"]["total_debit"] == 300.0,
+        f"balance {s['balance_check']}",
+    )
+    numbers = {line["account_number"] for line in s["lines"]}
+    expect(numbers == {"6000-001-010", "2130"}, f"accounts {numbers}")
+    expect(s["journal_entry"]["journal_entry_status"] == "draft", "status draft")
+    return {"lines": s["line_count"], "accounts": sorted(numbers)}
+
+
+@case("seeded: 600-char unicode/HTML/JSON description round-trips untouched")
+def t_seed_unicode() -> Any:
+    entry = seeded()["unicode-long-description"]
+    s = ok(
+        call(
+            "get_journal_entry", {"business_id": BU, "journal_entry_id": entry["journal_entry_id"]}
+        )
+    )
+    desc = s["journal_entry"]["description"]
+    expect(len(desc) == 600 and desc.startswith("LUCA-MCP-E2E"), f"description length {len(desc)}")
+    expect(
+        "<b>" in desc and '{"json":true}' in desc and "\U0001f4d2" in desc,
+        "special characters preserved",
+    )
+    found = ok(
+        call("search_journal_entries", {"business_id": BU, "q": "LUCA-MCP-E2E", "limit": 200})
+    )
+    expect(
+        found["total"] >= 7
+        and all(i["description"].startswith("LUCA-MCP-E2E") for i in found["items"]),
+        f"search total {found['total']}",
+    )
+    return {"length": len(desc), "search_total": found["total"]}
+
+
+@case("seeded: unbalanced entry is reported unbalanced and awaiting_validation")
+def t_seed_unbalanced() -> Any:
+    entry = seeded()["unbalanced-awaiting"]
+    s = ok(
+        call(
+            "get_journal_entry", {"business_id": BU, "journal_entry_id": entry["journal_entry_id"]}
+        )
+    )
+    bc = s["balance_check"]
+    expect(
+        bc["balanced"] is False and bc["total_debit"] == 500.0 and bc["total_credit"] == 499.0,
+        f"balance {bc}",
+    )
+    expect(s["journal_entry"]["journal_entry_status"] == "awaiting_validation", "demoted status")
+    return bc
+
+
+@case("seeded: canceled, tiny and zero-amount entries; period 202607 summary and filters")
+def t_seed_statuses() -> Any:
+    entries = seeded()
+    canceled = ok(
+        call(
+            "get_journal_entry",
+            {"business_id": BU, "journal_entry_id": entries["canceled-entry"]["journal_entry_id"]},
+        )
+    )
+    expect(canceled["journal_entry"]["journal_entry_status"] == "canceled", "canceled status")
+    tiny = ok(
+        call(
+            "get_journal_entry",
+            {"business_id": BU, "journal_entry_id": entries["tiny-amounts"]["journal_entry_id"]},
+        )
+    )
+    expect(
+        tiny["lines"][0]["debit"] == 0.01 or tiny["lines"][1]["debit"] == 0.01,
+        f"tiny amounts {tiny['lines']}",
+    )
+    zero = ok(
+        call(
+            "get_journal_entry",
+            {
+                "business_id": BU,
+                "journal_entry_id": entries["zero-amount-lines"]["journal_entry_id"],
+            },
+        )
+    )
+    expect(
+        zero["balance_check"]["balanced"] and zero["balance_check"]["total_debit"] == 0.0,
+        "zero amounts balance",
+    )
+    listing = ok(
+        call(
+            "list_journal_entries_for_period",
+            {"business_id": BU, "period_id": "202607", "q": "LUCA-MCP-E2E", "limit": 200},
+        )
+    )
+    expect(listing["total"] >= 7, f"period listing total {listing['total']}")
+    by_status = listing["summary"]["by_status"]
+    expect(
+        by_status.get("canceled", 0) >= 1 and by_status.get("draft", 0) >= 5, f"summary {by_status}"
+    )
+    only_canceled = ok(
+        call(
+            "list_journal_entries_for_period",
+            {"business_id": BU, "period_id": "202607", "status": "canceled", "q": "LUCA-MCP-E2E"},
+        )
+    )
+    expect(
+        [i["journal_entry_id"] for i in only_canceled["items"]]
+        == [entries["canceled-entry"]["journal_entry_id"]],
+        "canceled filter",
+    )
+    dated = ok(
+        call(
+            "list_journal_entries_for_period",
+            {
+                "business_id": BU,
+                "period_id": "202607",
+                "date_from": "2026-07-15",
+                "date_to": "2026-07-15",
+                "q": "LUCA-MCP-E2E",
+                "limit": 200,
+            },
+        )
+    )
+    expect(dated["total"] >= 7, f"dated {dated['total']}")
+    return {"summary": by_status, "seeded_in_period": listing["total"]}
+
+
 def run_suite() -> int:
     ordered = [
         t_whoami,
@@ -789,6 +930,10 @@ def run_suite() -> int:
         t_sat_archives,
         t_sat_archive,
         t_documents,
+        t_seed_many_lines,
+        t_seed_unicode,
+        t_seed_unbalanced,
+        t_seed_statuses,
         t_unknown_user,
         t_no_email,
         t_restricted_user,
