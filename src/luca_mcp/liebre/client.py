@@ -143,20 +143,6 @@ class LiebreClient:
                 continue
             return self._handle(response, path, platform_url=platform_url, what=what)
 
-    async def get_bytes(
-        self, path: str, *, firm_id: str | None, params: dict[str, Any] | None = None
-    ) -> httpx.Response:
-        """GET a binary resource (exports, files). Caller inspects the response."""
-        response = await self._http.get(
-            path,
-            params={k: v for k, v in (params or {}).items() if v is not None},
-            headers=self._headers(firm_id),
-            timeout=min(self._settings.liebre_timeout_seconds, max(self._remaining(), 1.0)),
-        )
-        if response.status_code >= 400:
-            self._handle(response, path)
-        return response
-
     # ---------------------------------------------------------------------------------------
     @staticmethod
     def _backoff(attempt: int, retry_after: str | None) -> float:

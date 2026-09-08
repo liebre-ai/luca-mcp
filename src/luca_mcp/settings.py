@@ -86,6 +86,17 @@ class Settings(BaseSettings):
     luca_mcp_upstream_refresh_threshold_seconds: int = 300
     luca_mcp_consent_mode: Literal["always", "remember", "off"] = "remember"
 
+    # Extra hostnames this server may be reached on (e.g. the run.app URL next to the custom
+    # domain). The host of LUCA_MCP_BASE_URL is always allowed.
+    luca_mcp_allowed_hosts: list[str] = Field(default_factory=list)
+
+    @field_validator("luca_mcp_allowed_hosts", mode="before")
+    @classmethod
+    def _split_hosts(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
     # --- tenant context ---------------------------------------------------------------------------
     tenant_cache_ttl_seconds: int = 300
 

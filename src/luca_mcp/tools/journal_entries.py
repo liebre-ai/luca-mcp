@@ -108,6 +108,8 @@ async def _period_entries(client, ref, period: str) -> list[dict[str, Any]]:
     cached = _period_cache.get(key)
     if cached and cached[0] > time.time():
         return cached[1]
+    if len(_period_locks) > 1000:
+        _period_locks.clear()
     lock = _period_locks.setdefault(key, asyncio.Lock())
     async with lock:
         cached = _period_cache.get(key)
@@ -192,7 +194,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         general, opening_balance, order, income_closing, expenses_closing), `date_from` /
         `date_to` (YYYY-MM-DD, inclusive), `q` (substring of the description). `summary` counts
         the whole period before filtering, so "how many entries are awaiting validation" needs no
-        paging. Sorted by date then number. Results are compact; use `get_journal_entry` for lines.
+        paging. Sorted by date then number. The period list is cached for up to 60 seconds. Results are compact; use `get_journal_entry` for lines.
         """
         period = validate_period(period_id)
         status_value = _validate_choice(status, "status", STATUSES)

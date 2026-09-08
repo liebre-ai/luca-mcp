@@ -27,7 +27,7 @@ client's reconnect action) to log in again."""
 
 
 def _allowed_hosts(settings: Settings) -> list[str]:
-    hosts = [urlparse(settings.base_url).netloc]
+    hosts = [urlparse(settings.base_url).netloc, *settings.luca_mcp_allowed_hosts]
     if settings.luca_mcp_env in ("local", "dev"):
         hosts += ["localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*"]
     return sorted(set(hosts))
@@ -44,7 +44,8 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         instructions=INSTRUCTIONS,
         version=__version__,
         auth=auth,
-        mask_error_details=False,
+        # Unexpected exceptions are masked outside local/dev so internals never reach clients.
+        mask_error_details=settings.luca_mcp_env not in ("local", "dev"),
     )
     register_all_tools(mcp, settings)
     return mcp

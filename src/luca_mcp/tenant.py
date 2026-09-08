@@ -125,6 +125,8 @@ class TenantCache:
         self._entries.pop(key, None)
 
     def lock(self, key: str) -> asyncio.Lock:
+        if len(self._locks) > 1000:
+            self._locks.clear()
         return self._locks.setdefault(key, asyncio.Lock())
 
 

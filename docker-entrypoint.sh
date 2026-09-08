@@ -4,4 +4,5 @@ set -euo pipefail
 exec uv run --no-dev uvicorn luca_mcp.main:create_app --factory \
   --host 0.0.0.0 --port "${PORT:-8080}" \
   --proxy-headers --forwarded-allow-ips='*' \
+  --no-access-log \
   --log-level "${UVICORN_LOG_LEVEL:-info}"

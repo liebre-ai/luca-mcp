@@ -47,6 +47,8 @@ async def account_index(
     cached = _index_cache.get(key)
     if cached and cached[0] > time.time():
         return cached[1]
+    if len(_index_locks) > 1000:
+        _index_locks.clear()
     lock = _index_locks.setdefault(key, asyncio.Lock())
     async with lock:
         cached = _index_cache.get(key)

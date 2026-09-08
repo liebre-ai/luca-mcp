@@ -88,6 +88,10 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             )
         if ctx.problems:
             result["problems"] = ctx.problems
+        if paged["total"] and not paged["items"]:
+            result["message"] = (
+                f"offset {offset_value} is beyond the {paged['total']} matching businesses."
+            )
         if not businesses and needle:
             result["message"] = (
                 f"No business matches {query!r} among the {len(ctx.business_list)} you can access."
