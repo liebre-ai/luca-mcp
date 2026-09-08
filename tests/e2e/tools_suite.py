@@ -93,6 +93,7 @@ def case(name: str) -> Callable[[Callable[[], Any]], Callable[[], Any]]:
                 )
                 print(f"FAIL  {name}: {exc!r}"[:400])
 
+        run.__name__ = fn.__name__
         return run
 
     return wrap
@@ -187,8 +188,13 @@ def t_periods() -> Any:
         bad_type["is_error"] and "valid integer" in bad_type["text"],
         f"year=abc: {bad_type['text'][:120]}",
     )
-    empty_year = ok(call("list_periods", {"business_id": BU, "year": 2099}))
-    expect(empty_year["count"] == 0, "empty year")
+    # Liebre answers a synthetic 13-period calendar for any year; a far-future year must simply
+    # have no open periods.
+    future = ok(call("list_periods", {"business_id": BU, "year": 2099}))
+    expect(
+        future["count"] == 13 and future["open_periods"] == [],
+        f"future year: {future['count']} periods, open={future['open_periods']}",
+    )
     return {"total_periods": all_periods["count"], "open_2026": y2026["open_periods"]}
 
 

@@ -299,6 +299,65 @@ def login(
     return session
 
 
+def drive_authorize_url(
+    start_url: str,
+    redirect_uri: str,
+    identity: str = DEFAULT_IDENTITY,
+    *,
+    consent_action: str = "approve",
+    login_decision: str = "allow",
+    trace: list[str] | None = None,
+) -> str:
+    """Follow a client-built /authorize URL (e.g. printed by `claude mcp login --no-browser`)
+    through Luca's consent page and the mock IdP login until the browser would land on
+    ``redirect_uri``. Returns that final URL (with code/state or error)."""
+    url = start_url
+    log = trace if trace is not None else []
+    with httpx.Client(timeout=15, follow_redirects=False) as http:
+        for _hop in range(20):
+            log.append(f"GET {url[:140]}")
+            response = http.get(
+                url, headers={"Sec-Fetch-Site": "none", "Sec-Fetch-Mode": "navigate"}
+            )
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = urljoin(url, response.headers["location"])
+                if location.startswith(redirect_uri):
+                    return location
+                url = location
+                continue
+            if response.status_code != 200:
+                raise HarnessError(
+                    f"unexpected {response.status_code} at {url[:120]}: {response.text[:300]}"
+                )
+            html = response.text
+            fields = _hidden_fields(html)
+            action_match = FORM_ACTION.search(html)
+            action = (
+                urljoin(url, action_match.group(1))
+                if action_match and action_match.group(1)
+                else url
+            )
+            if "csrf_token" in fields and "txn_id" in fields:
+                fields["action"] = consent_action
+                log.append(f"POST consent ({consent_action})")
+            elif "client_id" in fields and "redirect_uri" in fields:
+                fields["identity"] = identity
+                fields["decision"] = login_decision
+                log.append(f"POST mock login ({identity}, {login_decision})")
+            else:
+                raise HarnessError(f"unrecognised page at {url[:100]}: {html[:200]}")
+            response = http.post(action, data=fields, headers={"Sec-Fetch-Site": "same-origin"})
+            if response.status_code not in (301, 302, 303, 307, 308):
+                raise HarnessError(
+                    f"form POST {action} -> {response.status_code}: {response.text[:300]}"
+                )
+            location = urljoin(action, response.headers["location"])
+            if location.startswith(redirect_uri):
+                return location
+            url = location
+    raise HarnessError("too many hops in the browser flow")
+
+
 # ------------------------------------------------------------------------------------------------
 # MCP calls
 # ------------------------------------------------------------------------------------------------
