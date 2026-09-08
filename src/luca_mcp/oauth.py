@@ -56,6 +56,9 @@ class Tokens:
 
 
 def _keyring():
+    # LUCA_MCP_CREDENTIAL_STORE=file skips the OS keychain (tests, CI, headless machines).
+    if os.getenv("LUCA_MCP_CREDENTIAL_STORE", "auto").strip().lower() == "file":
+        return None
     try:
         import keyring
         from keyring.errors import KeyringError  # noqa: F401
