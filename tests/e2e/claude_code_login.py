@@ -24,7 +24,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 ARTIFACTS = REPO / ".e2e-artifacts"
-GIT_SOURCE = "git+https://github.com/liebre-ai/luca-mcp@feat/thin-client-over-rai"
+GIT_SOURCE = os.environ.get("LUCA_E2E_GIT_SOURCE", "git+https://github.com/liebre-ai/luca-mcp")
 
 PROMPT = (
     "You have the 'luca' MCP server. Do exactly this, in order: "
