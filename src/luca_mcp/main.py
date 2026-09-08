@@ -58,5 +58,9 @@ def create_app(settings: Settings | None = None) -> Starlette:
         path="/mcp",
         stateless_http=True,
         json_response=True,
+        # DNS-rebinding protection (spec: servers MUST validate Origin). Strict mode rejects any
+        # Host/Origin outside the base URL host, LUCA_MCP_ALLOWED_HOSTS and (local/dev) loopback.
+        host_origin_protection=True,
         allowed_hosts=_allowed_hosts(settings),
+        allowed_origins=[settings.base_url],
     )
