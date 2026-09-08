@@ -238,13 +238,15 @@ def t_userinfo_trick() -> dict[str, Any]:
 @case("authorize: trailing-slash resource tolerated; different resource -> invalid_target")
 def t_resource() -> dict[str, Any]:
     _, as_meta, client_id, redirect_uri = new_client()
-    query, _ = h.browser_flow(as_meta, client_id, redirect_uri, "openid", resource=h.MCP_URL + "/")
-    expect(query.get("error") == "invalid_target", f"expected invalid_target, got {query}")
-    query2, verifier = h.browser_flow(
-        as_meta, client_id, redirect_uri, "openid", resource=h.MCP_URL
+    slash, _ = h.browser_flow(as_meta, client_id, redirect_uri, "openid", resource=h.MCP_URL + "/")
+    expect("code" in slash, f"trailing-slash resource should be tolerated, got {slash}")
+    other, _ = h.browser_flow(
+        as_meta, client_id, redirect_uri, "openid", resource=h.BASE + "/other-server"
     )
-    expect("code" in query2, f"exact resource rejected: {query2}")
-    return {"mismatch": query, "exact": "ok"}
+    expect(other.get("error") == "invalid_target", f"expected invalid_target, got {other}")
+    exact, _ = h.browser_flow(as_meta, client_id, redirect_uri, "openid", resource=h.MCP_URL)
+    expect("code" in exact, f"exact resource rejected: {exact}")
+    return {"trailing_slash": "tolerated", "other_resource": other.get("error"), "exact": "ok"}
 
 
 @case("token: wrong PKCE verifier -> invalid_grant; code cannot be replayed")

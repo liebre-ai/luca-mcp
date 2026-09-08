@@ -7,33 +7,60 @@ from typing import Any
 from fastmcp import FastMCP
 
 from luca_mcp.settings import Settings
+from luca_mcp.tenant import BusinessRef
 from luca_mcp.tools._common import (
     READ_ONLY,
     business_scope,
+    page,
     platform_url,
+    require_optional_str,
     user_scope,
+    validate_limit,
+    validate_offset,
     validate_year,
 )
 
 
+def _matches(ref: BusinessRef, needle: str) -> bool:
+    haystack = " ".join(
+        str(part or "")
+        for part in (ref.business_id, ref.legal_name, ref.commercial_name, ref.tax_id)
+    ).lower()
+    return needle in haystack
+
+
 def register(mcp: FastMCP, settings: Settings) -> None:
     @mcp.tool(name="list_businesses", annotations=READ_ONLY)
-    async def list_businesses() -> dict[str, Any]:
+    async def list_businesses(
+        query: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
         """List the businesses (companies) the logged-in user can work on, with their firm.
 
         Call this first; every other tool needs one of these `business_id` values (format
         `bu-<n>`). Returns legal and commercial name, RFC (tax id), status and the accounting firm
-        each business belongs to. An empty list means the user has no access granted yet.
+        each business belongs to, favourites first. Firm administrators can see hundreds of
+        businesses: use `query` (case-insensitive match on id, names or RFC, e.g. "curiel" or
+        "CCO070716M34") and `limit`/`offset` (max 200 per page). An empty list with no `query`
+        means the user has no access granted yet.
         """
+        needle = (require_optional_str(query, "query") or "").lower()
+        limit_value = validate_limit(limit, default=50)
+        offset_value = validate_offset(offset)
         _, ctx = await user_scope(settings)
         firm_names = {
             f.get("accounting_firm_id"): f.get("commercial_name") or f.get("legal_name")
             for f in ctx.firms
         }
+        refs = sorted(ctx.business_list, key=lambda r: (not r.favorite, r.business_id))
+        if needle:
+            refs = [ref for ref in refs if _matches(ref, needle)]
         businesses = [
             {**ref.summary(), "accounting_firm_name": firm_names.get(ref.accounting_firm_id)}
-            for ref in sorted(ctx.business_list, key=lambda r: (not r.favorite, r.business_id))
+            for ref in refs
         ]
+        paged = page(businesses, limit_value, offset_value)
         result: dict[str, Any] = {
             "user": ctx.email,
             "firms": [
@@ -45,13 +72,27 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 }
                 for f in ctx.firms
             ],
-            "businesses": businesses,
-            "count": len(businesses),
+            "query": needle or None,
+            "businesses": paged["items"],
+            "count": paged["count"],
+            "total": paged["total"],
+            "offset": paged["offset"],
+            "limit": paged["limit"],
+            "has_more": paged["has_more"],
             "platform_url": platform_url(settings),
         }
+        if paged["has_more"]:
+            result["hint"] = (
+                f"{paged['total']} businesses match; showing {paged['count']} from offset "
+                f"{paged['offset']}. Narrow with `query` or page with `offset`."
+            )
         if ctx.problems:
             result["problems"] = ctx.problems
-        if not businesses:
+        if not businesses and needle:
+            result["message"] = (
+                f"No business matches {query!r} among the {len(ctx.business_list)} you can access."
+            )
+        elif not businesses:
             result["message"] = (
                 "No businesses are available to you. Either no firm has granted you access yet, "
                 "or listing is restricted for your role. Ask your firm administrator in the Liebre "

@@ -49,9 +49,17 @@ def _validate_levels_deep(value: Any) -> str:
 
 
 def flatten_accounts(
-    rows: list[dict[str, Any]], *, depth: int = 0, out: list[dict[str, Any]] | None = None
+    rows: list[dict[str, Any]],
+    *,
+    depth: int = 0,
+    max_depth: int | None = None,
+    out: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    """Flatten the nested account tree. ``max_depth`` keeps depths 0..max_depth-1 (None = all);
+    the API returns the whole subtree whatever ``levels_deep`` says."""
     out = [] if out is None else out
+    if max_depth is not None and depth >= max_depth:
+        return out
     for row in rows:
         out.append(
             {
@@ -73,7 +81,7 @@ def flatten_accounts(
         )
         children = row.get("sub_ledger_accounts") or []
         if children:
-            flatten_accounts(children, depth=depth + 1, out=out)
+            flatten_accounts(children, depth=depth + 1, max_depth=max_depth, out=out)
     return out
 
 
@@ -125,7 +133,9 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             what=f"trial balance of {ref.business_id} {start}-{end or start}",
         )
         body = body if isinstance(body, dict) else {}
-        rows = flatten_accounts(body.get("data") or [])
+        rows = flatten_accounts(
+            body.get("data") or [], max_depth=None if levels == "all" else int(levels)
+        )
         truncated = len(rows) > cap
         result: dict[str, Any] = {
             "business_id": ref.business_id,
