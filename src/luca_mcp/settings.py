@@ -6,11 +6,12 @@ defaulted: a missing signing key or upstream client secret fails startup on purp
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, HttpUrl, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Redirect URIs MCP clients are allowed to register. Loopback entries are matched with the
 # RFC 8252 §7.3 rule (any port), everything else is an exact match. Extend by configuration,
@@ -33,6 +34,18 @@ DEFAULT_ALLOWED_REDIRECT_URIS: tuple[str, ...] = (
 DEFAULT_ADVERTISED_SCOPES: tuple[str, ...] = ("openid", "email", "offline_access")
 
 
+def _split_list(value: object) -> object:
+    """Accept "a,b" (comma separated) or a JSON array string for list settings."""
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            return json.loads(text)
+        return [item.strip() for item in text.split(",") if item.strip()]
+    return value
+
+
+# List settings are read as comma-separated strings: NoDecode stops pydantic-settings from
+# JSON-decoding the raw value before the CSV validators run (a plain "a,b" would otherwise fail).
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -79,23 +92,25 @@ class Settings(BaseSettings):
     redis_url: str | None = None
 
     # --- OAuth surface --------------------------------------------------------------------------
-    luca_mcp_allowed_redirect_uris: list[str] = Field(default=list(DEFAULT_ALLOWED_REDIRECT_URIS))
-    luca_mcp_advertised_scopes: list[str] = Field(default=list(DEFAULT_ADVERTISED_SCOPES))
-    luca_mcp_required_scopes: list[str] = Field(default=["openid"])
+    luca_mcp_allowed_redirect_uris: Annotated[list[str], NoDecode] = Field(
+        default=list(DEFAULT_ALLOWED_REDIRECT_URIS)
+    )
+    luca_mcp_advertised_scopes: Annotated[list[str], NoDecode] = Field(
+        default=list(DEFAULT_ADVERTISED_SCOPES)
+    )
+    luca_mcp_required_scopes: Annotated[list[str], NoDecode] = Field(default=["openid"])
     luca_mcp_access_token_ttl_seconds: int = 3600
     luca_mcp_upstream_refresh_threshold_seconds: int = 300
     luca_mcp_consent_mode: Literal["always", "remember", "off"] = "remember"
 
     # Extra hostnames this server may be reached on (e.g. the run.app URL next to the custom
     # domain). The host of LUCA_MCP_BASE_URL is always allowed.
-    luca_mcp_allowed_hosts: list[str] = Field(default_factory=list)
+    luca_mcp_allowed_hosts: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     @field_validator("luca_mcp_allowed_hosts", mode="before")
     @classmethod
     def _split_hosts(cls, value: object) -> object:
-        if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
-        return value
+        return _split_list(value)
 
     # --- tenant context ---------------------------------------------------------------------------
     tenant_cache_ttl_seconds: int = 300
@@ -108,9 +123,7 @@ class Settings(BaseSettings):
     )
     @classmethod
     def _split_csv(cls, value: object) -> object:
-        if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
-        return value
+        return _split_list(value)
 
     @model_validator(mode="after")
     def _check_urls(self) -> Settings:

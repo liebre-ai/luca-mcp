@@ -293,6 +293,8 @@ def build_state_store(settings: Settings) -> FernetEncryptionWrapper:
 
 def build_auth_provider(settings: Settings) -> LucaOIDCProxy:
     """Construct the provider, retrying the upstream discovery fetch (override 3)."""
+    # Key/store problems must fail fast with their own message, not as "discovery failed".
+    storage = build_state_store(settings)
     last_error: Exception | None = None
     for attempt in range(1, settings.auth0_discovery_retries + 1):
         try:
@@ -309,7 +311,7 @@ def build_auth_provider(settings: Settings) -> LucaOIDCProxy:
                 required_scopes=settings.luca_mcp_required_scopes,
                 valid_scopes=settings.luca_mcp_advertised_scopes,
                 allowed_client_redirect_uris=settings.luca_mcp_allowed_redirect_uris,
-                client_storage=build_state_store(settings),
+                client_storage=storage,
                 jwt_signing_key=settings.luca_mcp_jwt_signing_key,
                 token_endpoint_auth_method="client_secret_post",
                 require_authorization_consent=settings.consent_setting,
