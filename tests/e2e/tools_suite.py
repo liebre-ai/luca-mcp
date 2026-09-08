@@ -255,9 +255,16 @@ def t_business() -> Any:
 def t_scoping() -> Any:
     e = err(call("get_business", {"business_id": "bu-999999999"}), "unknown_business")
     expect("list_businesses" in (e.get("hint") or ""), "hint mentions list_businesses")
-    err(call("get_business", {"business_id": "'; DROP TABLE business; --"}), "unknown_business")
-    # ids that could change the request path never leave the client
-    for traversal in ("../../accounting_firms", "bu-2/periods", "bu-2?x=1", "bu-2#f", "bu 2"):
+    err(call("get_business", {"business_id": "bu-2';DROP"}), "unknown_business")  # reaches rai
+    # ids that could change the request path (or contain whitespace) never leave the client
+    for traversal in (
+        "../../accounting_firms",
+        "bu-2/periods",
+        "bu-2?x=1",
+        "bu-2#f",
+        "bu 2",
+        "'; DROP TABLE business; --",
+    ):
         e = err(call("get_business", {"business_id": traversal}), "invalid_input")
         expect("business_id" in e["message"], f"names the argument: {e['message']}")
     err(
