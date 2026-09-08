@@ -29,6 +29,11 @@ agent ──stdio──▶ luca-mcp (this repo) ──bearer──▶ rai /api/v
   the account must be active, and the business must be linked to you with `allowed` status. rai
   then calls the Liebre API with its machine token and your `User-Id`. Deleted businesses are
   hidden.
+- **Staff access (dev).** While rai's login provider is Google (Auth0 not yet configured), the
+  browser always asks which Google account to use. A Liebre user acts as themselves; a staff
+  account that is not a Liebre user gets read-only access to the firms in rai's
+  `MCP_STAFF_FIRM_IDS` (the sandbox firm `af-2` by default in dev, nothing in production), and
+  `whoami` says so (`session.mode = "staff"`). Anyone else is refused at login with the reason.
 - **Tool logic** (shapes, validation, hints) lives in rai; this client is thin on purpose so
   everyone gets fixes without reinstalling.
 
@@ -141,14 +146,17 @@ All optional, see `.env.example`: `LUCA_RAI_URL`, `LUCA_MCP_CLIENT_ID`, `LUCA_MC
 `file` skips the OS keychain for CI and headless machines).
 
 Server-side settings (ant-rai): `MCP_OAUTH_IDP=auth0`, `MCP_AUTH0_DOMAIN`, `MCP_AUTH0_CLIENT_ID`,
-`MCP_AUTH0_CLIENT_SECRET`, `MCP_OAUTH_ALLOWED_CLIENT_IDS` (default `claude-code,luca-mcp`). The
+`MCP_AUTH0_CLIENT_SECRET`, `MCP_OAUTH_ALLOWED_CLIENT_IDS` (default `claude-code,luca-mcp`),
+`MCP_STAFF_FIRM_IDS` (staff read access for Google logins without a Liebre account; empty
+disables it). The
 Auth0 application rai needs: Regular Web Application, callback `https://<rai>/oauth/callback`,
 scopes `openid email profile`.
 
 ## Status and known limitations
 
-- Dev: works against the local rai and dev Liebre. The dev rai deployment needs the Auth0
-  application and the `MCP_*` settings before the default `LUCA_RAI_URL` works for everyone.
+- Dev: works against the dev rai deployment with the Google staff login (staff access to the
+  sandbox firm for people who are not Liebre users yet). Customers need the Auth0 application
+  and the `MCP_AUTH0_*` settings on that deployment.
 - Read-only; write tools are planned, not built. Excluded operations answer with a link to the
   platform.
 - Deep links point to the platform root until the frontend routes are confirmed.
