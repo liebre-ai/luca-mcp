@@ -742,6 +742,34 @@ def t_prompts() -> Any:
     return out
 
 
+@case(
+    "identity: restricted (standard_user) synthetic account sees only its business and can report"
+)
+def t_restricted_user() -> Any:
+    other = h.login(identity="Tom.Hagen.10@yopmail.com", save=False)
+    listing = ok(call("list_businesses", token=other.access_token))
+    expect(
+        listing["total"] == 1 and listing["businesses"][0]["business_id"] == BU,
+        f"restricted listing {listing['total']}",
+    )
+    tb = ok(
+        call(
+            "get_trial_balance",
+            {"business_id": BU, "start_period_id": "202608"},
+            token=other.access_token,
+        )
+    )
+    expect(
+        tb["status"] in ("ready", "processing") and tb["row_count"] > 0,
+        "restricted user can read reports",
+    )
+    err(
+        call("get_business", {"business_id": "bu-1240"}, token=other.access_token),
+        "unknown_business",
+    )
+    return {"total_visible": listing["total"], "rows": tb["row_count"]}
+
+
 def run_suite() -> int:
     ordered = [
         t_whoami,
@@ -763,6 +791,7 @@ def run_suite() -> int:
         t_documents,
         t_unknown_user,
         t_no_email,
+        t_restricted_user,
         t_concurrency,
         t_types,
         t_prompts,
