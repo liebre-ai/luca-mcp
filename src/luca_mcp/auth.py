@@ -28,9 +28,11 @@ import logging
 import time
 from functools import partial
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 from cryptography.fernet import Fernet
+from fastmcp.server.auth.identity_assertion import normalize_resource_url
 from fastmcp.server.auth.oauth_proxy.models import _hash_token
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from key_value.aio.stores.memory import MemoryStore
@@ -38,8 +40,9 @@ from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 from mcp.server.auth.middleware.client_auth import AuthenticationError, ClientAuthenticator
 from mcp.server.auth.provider import AccessToken, RefreshToken
 from mcp.server.auth.routes import cors_middleware
+from pydantic import AnyUrl
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from luca_mcp.settings import Settings
@@ -179,19 +182,79 @@ class LucaOIDCProxy(OIDCProxy):
             await self.revoke_token(found)
         return Response(status_code=200, headers={"Cache-Control": "no-store"})
 
+    # -- RFC 8707: reject authorization requests for a resource that is not this server ----------
+    def _with_resource_check(self, inner: Any) -> Any:
+        """fastmcp's authorize handler never reads ``resource``, so its own check is unreachable.
+
+        Clients that send a resource for another server get ``invalid_target`` (delivered to
+        their registered redirect URI when possible). A trailing slash or query string on our own
+        URL is tolerated, matching fastmcp's normaliser. Token audiences are unaffected either
+        way: Luca always mints tokens for its own ``/mcp`` URL.
+        """
+
+        async def endpoint(request: Request) -> Response:
+            if request.method == "GET":
+                params: dict[str, str] = dict(request.query_params)
+            else:
+                params = {k: str(v) for k, v in (await request.form()).items()}
+            resource = params.get("resource")
+            if resource and self._resource_url:
+                if normalize_resource_url(resource) != normalize_resource_url(
+                    str(self._resource_url)
+                ):
+                    logger.warning(
+                        "Rejecting authorize for resource %r (this server is %s)",
+                        resource,
+                        self._resource_url,
+                    )
+                    error = {
+                        "error": "invalid_target",
+                        "error_description": (
+                            f"Resource {resource!r} is not this server; use {self._resource_url}"
+                        ),
+                    }
+                    client_id, redirect_uri = params.get("client_id"), params.get("redirect_uri")
+                    client = await self.get_client(client_id) if client_id else None
+                    if client and redirect_uri:
+                        try:
+                            client.validate_redirect_uri(AnyUrl(redirect_uri))
+                        except Exception:
+                            return JSONResponse(error, status_code=400)
+                        if params.get("state"):
+                            error["state"] = params["state"]
+                        separator = "&" if "?" in redirect_uri else "?"
+                        return RedirectResponse(
+                            f"{redirect_uri}{separator}{urlencode(error)}", status_code=302
+                        )
+                    return JSONResponse(error, status_code=400)
+            return await inner(request)
+
+        return endpoint
+
     # -- override 4: also serve the protected-resource metadata at the root path -----------------
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
         routes = super().get_routes(mcp_path)
-        routes = [
-            Route(
-                "/revoke",
-                endpoint=cors_middleware(self._handle_revoke, ["POST", "OPTIONS"]),
-                methods=["POST", "OPTIONS"],
-            )
-            if isinstance(r, Route) and r.path == "/revoke"
-            else r
-            for r in routes
-        ]
+        replaced: list[Route] = []
+        for r in routes:
+            if isinstance(r, Route) and r.path == "/revoke":
+                replaced.append(
+                    Route(
+                        "/revoke",
+                        endpoint=cors_middleware(self._handle_revoke, ["POST", "OPTIONS"]),
+                        methods=["POST", "OPTIONS"],
+                    )
+                )
+            elif isinstance(r, Route) and r.path == "/authorize":
+                replaced.append(
+                    Route(
+                        "/authorize",
+                        endpoint=self._with_resource_check(r.endpoint),
+                        methods=sorted(r.methods or {"GET", "POST"}),
+                    )
+                )
+            else:
+                replaced.append(r)
+        routes = replaced
         prm_routes = [
             r for r in routes if isinstance(r, Route) and r.path.startswith(PRM_ROOT_PATH)
         ]
