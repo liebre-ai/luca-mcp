@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import time
+from functools import partial
 from typing import Any
 
 import httpx
@@ -34,7 +35,11 @@ from fastmcp.server.auth.oauth_proxy.models import _hash_token
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from key_value.aio.stores.memory import MemoryStore
 from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
+from mcp.server.auth.middleware.client_auth import AuthenticationError, ClientAuthenticator
 from mcp.server.auth.provider import AccessToken, RefreshToken
+from mcp.server.auth.routes import cors_middleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from luca_mcp.settings import Settings
@@ -132,9 +137,61 @@ class LucaOIDCProxy(OIDCProxy):
             except Exception as exc:  # revocation is best effort; the local session is already dead
                 logger.warning("Upstream refresh token revocation failed: %s", exc)
 
+    # -- /revoke handler tolerant of public clients ------------------------------------------------
+    async def _handle_revoke(self, request: Request) -> Response:
+        """RFC 7009 revocation endpoint.
+
+        Replaces the SDK handler, whose request model declares ``client_secret`` without a
+        default: pydantic then treats it as required and every public client (Claude Code, Codex,
+        Cursor register with ``token_endpoint_auth_method: none``) gets 400 on logout. Same
+        semantics otherwise: authenticate the client, find the token, only revoke the caller's own.
+        """
+        try:
+            client = await ClientAuthenticator(self).authenticate_request(request)
+        except AuthenticationError as exc:
+            return JSONResponse(
+                {"error": "unauthorized_client", "error_description": exc.message}, status_code=401
+            )
+        form = await request.form()
+        token = form.get("token")
+        if not isinstance(token, str) or not token:
+            return JSONResponse(
+                {"error": "invalid_request", "error_description": "token is required"},
+                status_code=400,
+            )
+        loaders = [self.load_access_token, partial(self.load_refresh_token, client)]
+        if form.get("token_type_hint") == "refresh_token":
+            loaders.reverse()
+        found: AccessToken | RefreshToken | None = None
+        for loader in loaders:
+            found = await loader(token)
+            if found is not None:
+                break
+        if found is None:
+            logger.info("Revoke: unknown or already-dead token (client=%s)", client.client_id)
+        elif found.client_id != client.client_id:
+            logger.warning(
+                "Revoke: token belongs to client %s but caller is %s; ignored",
+                found.client_id,
+                client.client_id,
+            )
+        else:
+            await self.revoke_token(found)
+        return Response(status_code=200, headers={"Cache-Control": "no-store"})
+
     # -- override 4: also serve the protected-resource metadata at the root path -----------------
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
         routes = super().get_routes(mcp_path)
+        routes = [
+            Route(
+                "/revoke",
+                endpoint=cors_middleware(self._handle_revoke, ["POST", "OPTIONS"]),
+                methods=["POST", "OPTIONS"],
+            )
+            if isinstance(r, Route) and r.path == "/revoke"
+            else r
+            for r in routes
+        ]
         prm_routes = [
             r for r in routes if isinstance(r, Route) and r.path.startswith(PRM_ROOT_PATH)
         ]

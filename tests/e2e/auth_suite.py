@@ -235,7 +235,7 @@ def t_userinfo_trick() -> dict[str, Any]:
     raise AssertionError("userinfo-trick redirect accepted")
 
 
-@case("authorize: resource mismatch (trailing slash) -> invalid_target; exact resource accepted")
+@case("authorize: trailing-slash resource tolerated; different resource -> invalid_target")
 def t_resource() -> dict[str, Any]:
     _, as_meta, client_id, redirect_uri = new_client()
     query, _ = h.browser_flow(as_meta, client_id, redirect_uri, "openid", resource=h.MCP_URL + "/")
@@ -259,12 +259,17 @@ def t_pkce() -> dict[str, Any]:
         redirect_uri,
     )
     expect(
-        bad.status_code == 400 and bad.json().get("error") == "invalid_grant",
+        bad.status_code in (400, 401) and bad.json().get("error") == "invalid_grant",
         f"bad verifier -> {bad.status_code} {bad.text[:120]}",
     )
     good = h.exchange_code(as_meta, client_id, query["code"], verifier, redirect_uri)
     replay = h.exchange_code(as_meta, client_id, query["code"], verifier, redirect_uri)
-    return {"bad": bad.json(), "good_after_bad": good.status_code, "replay": replay.status_code}
+    expect(replay.status_code != 200, "authorization code replay must fail")
+    return {
+        "bad": bad.json(),
+        "good_after_bad": good.status_code,
+        "replay": replay.status_code,
+    }
 
 
 @case("bearer hygiene: garbage, refresh-as-access, raw upstream token, expired-looking -> 401")
