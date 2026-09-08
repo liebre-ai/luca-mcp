@@ -102,6 +102,7 @@ uv run python tests/e2e/harness.py auth-suite   # 17 authentication edge cases
 uv run python tests/e2e/tools_suite.py          # 23 tool cases against dev bu-2 (use --only <substring>)
 uv run python tests/e2e/expiry_suite.py         # token lifetimes: expiry, client refresh, transparent upstream refresh
 uv run python tests/e2e/claude_code_login.py <project_dir>   # real Claude Code CLI login (see file docstring)
+uv run python tests/e2e/codex_login.py                       # real Codex CLI login (after `codex mcp add luca --url ...`)
 ```
 
 `dev/mock_idp.py` is a **dev-only** OpenID provider that stands in for Auth0 until the real
