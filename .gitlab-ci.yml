@@ -1,0 +1,112 @@
+# Tag-driven build and deploy, mirroring ant-rai / ant-liebre-api.
+#
+# Flow: GitHub Action tags vX.Y.Z on main -> tag mirrored here -> build image -> deploy to
+# development automatically, staging/production manually. Environment-scoped CI variables:
+# GOOGLE_CLOUD_PROJECT, CLOUD_RUN_SERVICE, REGISTRY_PATH, GCP_WIF_CONFIG (file), plus the
+# runtime configuration below, which is set on the Cloud Run service (Secret Manager for secrets),
+# not in CI:
+#   LUCA_MCP_ENV, LUCA_MCP_BASE_URL, LIEBRE_API_BASE_URL, LIEBRE_APP_BASE_URL,
+#   AUTH0_CONFIG_URL, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET (secret), AUTH0_AUDIENCE,
+#   LUCA_MCP_JWT_SIGNING_KEY (secret), LUCA_MCP_STORAGE_KEY (secret), REDIS_URL (week 1).
+#
+# Beta topology: --min-instances=1 --max-instances=1 --concurrency=20 until REDIS_URL is set
+# (the in-memory OAuth state store is per instance).
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $TARGET_VERSION
+    - when: never
+
+default:
+  retry:
+    max: 1
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - scheduler_failure
+
+stages:
+  - build
+  - deploy
+
+build:
+  stage: build
+  image: us-central1-docker.pkg.dev/logickernel-fleet/registry/docker:27
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  id_tokens:
+    GCP_ID_TOKEN:
+      aud: https://code.logickernel.com
+  script:
+    - export IMAGE_TAG="${CI_COMMIT_TAG#v}"
+    - |
+      WIF_CONTENT=$(cat "$GCP_WIF_CONFIG" | sed "s|/tmp/gcp_id_token.jwt|/tmp/token.jwt|")
+      GCR_TOKEN=$(docker run --rm \
+        -e WIF_CONFIG="$WIF_CONTENT" \
+        -e ID_TOKEN="$GCP_ID_TOKEN" \
+        us-central1-docker.pkg.dev/logickernel-fleet/registry/cloud-sdk:slim sh -c '
+          echo "$ID_TOKEN" > /tmp/token.jwt
+          echo "$WIF_CONFIG" > /tmp/wif.json
+          gcloud auth login --cred-file=/tmp/wif.json --quiet >/dev/null 2>&1
+          gcloud auth print-access-token
+        ')
+      echo "$GCR_TOKEN" | docker login -u oauth2accesstoken --password-stdin us-central1-docker.pkg.dev
+    - docker buildx create --name fleet-builder --driver docker-container --use 2>/dev/null || docker buildx use fleet-builder
+    - >-
+      docker buildx build
+      --platform linux/amd64
+      --tag ${REGISTRY_PATH}/luca-mcp:${IMAGE_TAG}
+      --cache-from type=registry,ref=${REGISTRY_PATH}/luca-mcp/buildkit-cache
+      --cache-to type=registry,ref=${REGISTRY_PATH}/luca-mcp/buildkit-cache,mode=max
+      --push .
+
+.deploy:
+  stage: deploy
+  image: us-central1-docker.pkg.dev/logickernel-fleet/registry/cloud-sdk:slim
+  id_tokens:
+    GCP_ID_TOKEN:
+      aud: https://code.logickernel.com
+  script:
+    - export IMAGE_TAG="${TARGET_VERSION:-${CI_COMMIT_TAG#v}}"
+    - |
+      echo "$GCP_ID_TOKEN" > /tmp/token.jwt
+      cp "$GCP_WIF_CONFIG" /tmp/wif.json
+      sed -i "s|/tmp/gcp_id_token.jwt|/tmp/token.jwt|" /tmp/wif.json
+      gcloud auth login --cred-file=/tmp/wif.json --quiet
+    - >-
+      gcloud run services update ${CLOUD_RUN_SERVICE}
+      --project=${GOOGLE_CLOUD_PROJECT}
+      --image=${REGISTRY_PATH}/luca-mcp:${IMAGE_TAG}
+      --region=us-central1
+      --update-env-vars=LUCA_MCP_BUILD=v${IMAGE_TAG}
+      --quiet
+
+deploy:development:
+  extends: .deploy
+  needs: [build]
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  environment:
+    name: development
+
+deploy:staging:
+  extends: .deploy
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+      when: manual
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $TARGET_VERSION
+      when: manual
+  environment:
+    name: staging
+
+deploy:production:
+  extends: .deploy
+  needs: ["deploy:staging"]
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+      when: manual
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $TARGET_VERSION
+      when: manual
+  environment:
+    name: production

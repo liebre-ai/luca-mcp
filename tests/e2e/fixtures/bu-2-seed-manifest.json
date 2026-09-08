@@ -1,0 +1,280 @@
+{
+ "created_at_utc": "2026-09-08T20:45:33.473254+00:00",
+ "environment": {
+  "api_base": "https://api-dev.liebre.ai/api/v1",
+  "business_id": "bu-2",
+  "accounting_firm_id": "af-2",
+  "period_id": "202607",
+  "entry_date": "2026-07-15",
+  "description_prefix": "LUCA-MCP-E2E"
+ },
+ "accounts_used": {
+  "asset": {
+   "ledger_account_id": "e62c3ded-15f6-4c5d-a73c-0b88291b57fc",
+   "number": "1110-001",
+   "name": "Caja o efectivo",
+   "type": "assets",
+   "currency": "mxn"
+  },
+  "expense": {
+   "ledger_account_id": "55b5793b-f9dc-4168-bcd2-cc2072af430c",
+   "number": "6000-001-010",
+   "name": "Materiales de oficina",
+   "type": "expenses",
+   "currency": "mxn"
+  },
+  "liability": {
+   "ledger_account_id": "59f5613f-1f40-4c30-8ed4-c361dad8bf3e",
+   "number": "2130",
+   "name": "Documentos por pagar",
+   "type": "liabilities",
+   "currency": "mxn"
+  }
+ },
+ "endpoints_used": [
+  "GET https://api-dev.liebre.ai/api/v1/businesses/bu-2/chart_of_accounts/202607?levels_deep=all",
+  "GET https://api-dev.liebre.ai/api/v1/businesses/bu-2/periods/202607",
+  "GET https://api-dev.liebre.ai/api/v1/businesses/bu-2/periods/202607/journal_entries",
+  "GET https://api-dev.liebre.ai/api/v1/businesses/bu-2/periods/202607/journal_entries/{id}",
+  "POST https://api-dev.liebre.ai/api/v1/businesses/bu-2/periods/202607/journal_entries/",
+  "PUT https://api-dev.liebre.ai/api/v1/businesses/bu-2/periods/202607/journal_entries/{id}/"
+ ],
+ "cases": [
+  {
+   "label": "draft-2-lines",
+   "journal_entry_id": "499640ad-1cf0-4c5e-812e-f67bc83cf6a7",
+   "number": 9359,
+   "period_id": "202607",
+   "requested_status": "draft",
+   "stored_status": "draft",
+   "line_count": 2,
+   "requested_line_count": 2,
+   "description_length": 54,
+   "description_utf8_bytes": 54,
+   "request_http_status": 200,
+   "response_error": null,
+   "updated_at": "2026-09-08T20:45:06.594862Z",
+   "attempts": [
+    {
+     "status_sent": "draft",
+     "http": 200,
+     "path": "/businesses/bu-2/periods/202607/journal_entries/",
+     "error": null
+    }
+   ],
+   "entry_lines_sum_debit": 1234.56,
+   "entry_lines_sum_credit": 1234.56,
+   "stored_description_matches": true,
+   "notes": [
+    "Baseline; indexes 1 and 2 preserved (existing entries in this business use 0-based indexes, so both bases are accepted)."
+   ],
+   "finished_at_utc": "2026-09-08T20:45:07.162388+00:00"
+  },
+  {
+   "label": "many-lines-60",
+   "journal_entry_id": "052df494-e070-44c0-876e-143b07b56410",
+   "number": 9360,
+   "period_id": "202607",
+   "requested_status": "draft",
+   "stored_status": "draft",
+   "line_count": 60,
+   "requested_line_count": 60,
+   "description_length": 83,
+   "description_utf8_bytes": 83,
+   "request_http_status": 200,
+   "response_error": null,
+   "updated_at": "2026-09-08T20:45:23.192484Z",
+   "attempts": [
+    {
+     "status_sent": "draft",
+     "http": 200,
+     "path": "/businesses/bu-2/periods/202607/journal_entries/",
+     "error": null
+    }
+   ],
+   "entry_lines_sum_debit": 300.0,
+   "entry_lines_sum_credit": 300.0,
+   "stored_description_matches": true,
+   "notes": [
+    "All 60 lines stored with indexes 1..60 preserved (30 debits of 10.00 on 6000-001-010, 30 credits of 10.00 on 2130)."
+   ],
+   "finished_at_utc": "2026-09-08T20:45:25.727863+00:00"
+  },
+  {
+   "label": "unicode-long-description",
+   "journal_entry_id": "b01110ff-0909-49aa-91ef-e5911e951175",
+   "number": 9361,
+   "period_id": "202607",
+   "requested_status": "draft",
+   "stored_status": "draft",
+   "line_count": 2,
+   "requested_line_count": 2,
+   "description_length": 600,
+   "description_utf8_bytes": 703,
+   "request_http_status": 200,
+   "response_error": null,
+   "updated_at": "2026-09-08T20:45:26.414781Z",
+   "attempts": [
+    {
+     "status_sent": "draft",
+     "http": 200,
+     "path": "/businesses/bu-2/periods/202607/journal_entries/",
+     "error": null
+    }
+   ],
+   "entry_lines_sum_debit": 250.75,
+   "entry_lines_sum_credit": 250.75,
+   "stored_description_matches": true,
+   "notes": [
+    "Description stored byte-for-byte identical (600 code points / 703 UTF-8 bytes); no escaping or truncation of quotes, <b>, emoji or the {\"json\":true} literal."
+   ],
+   "finished_at_utc": "2026-09-08T20:45:26.913001+00:00"
+  },
+  {
+   "label": "unbalanced-awaiting",
+   "journal_entry_id": "39edcd09-9f76-4944-98de-8d887e29aaa2",
+   "number": 9362,
+   "period_id": "202607",
+   "requested_status": "user_validated",
+   "stored_status": "awaiting_validation",
+   "line_count": 2,
+   "requested_line_count": 2,
+   "description_length": 113,
+   "description_utf8_bytes": 113,
+   "request_http_status": 200,
+   "response_error": null,
+   "updated_at": "2026-09-08T20:45:27.562077Z",
+   "attempts": [
+    {
+     "status_sent": "user_validated",
+     "http": 200,
+     "path": "/businesses/bu-2/periods/202607/journal_entries/",
+     "error": null
+    }
+   ],
+   "entry_lines_sum_debit": 500.0,
+   "entry_lines_sum_credit": 499.0,
+   "stored_description_matches": true,
+   "notes": [
+    "expected: API accepts but stores awaiting_validation",
+    "Requested user_validated; API accepted (HTTP 200) and stored awaiting_validation as expected. Debit 500.00 / credit 499.00 persisted unchanged."
+   ],
+   "finished_at_utc": "2026-09-08T20:45:28.071795+00:00"
+  },
+  {
+   "label": "canceled-entry",
+   "journal_entry_id": "96d7083d-a148-4582-bb27-d0db7e0e4c78",
+   "number": 9363,
+   "period_id": "202607",
+   "requested_status": "canceled (via PUT after draft create)",
+   "stored_status": "canceled",
+   "line_count": 2,
+   "requested_line_count": 2,
+   "description_length": 80,
+   "description_utf8_bytes": 80,
+   "request_http_status": 200,
+   "response_error": null,
+   "updated_at": "2026-09-08T20:45:29.782365Z",
+   "attempts": [
+    {
+     "status_sent": "draft",
+     "http": 200,
+     "path": "/businesses/bu-2/periods/202607/journal_entries/",
+     "error": null
+    }
+   ],
+   "transitions": [
+    {
+     "target": "canceled",
+     "http": 200,
+     "path": "/businesses/bu-2/periods/202607/journal_entries/96d7083d-a148-4582-bb27-d0db7e0e4c78/",
+     "expected_updated_at_sent": "2026-09-08T20:45:28.752737Z",
+     "error": null
+    }
+   ],
+   "entry_lines_sum_debit": 321.0,
+   "entry_lines_sum_credit": 321.0,
+   "stored_description_matches": true,
+   "notes": [
+    "Direct draft -> canceled via a single PUT (full body + journal_entry_status=canceled + expected_updated_at) was accepted (HTTP 200); the two-step fallback was not needed."
+   ],
+   "finished_at_utc": "2026-09-08T20:45:31.072143+00:00"
+  },
+  {
+   "label": "tiny-amounts",
+   "journal_entry_id": "d8bdad60-242f-4561-86cf-e1e1fb53a80b",
+   "number": 9364,
+   "period_id": "202607",
+   "requested_status": "draft",
+   "stored_status": "draft",
+   "line_count": 2,
+   "requested_line_count": 2,
+   "description_length": 65,
+   "description_utf8_bytes": 65,
+   "request_http_status": 200,
+   "response_error": null,
+   "updated_at": "2026-09-08T20:45:31.738562Z",
+   "attempts": [
+    {
+     "status_sent": "draft",
+     "http": 200,
+     "path": "/businesses/bu-2/periods/202607/journal_entries/",
+     "error": null
+    }
+   ],
+   "entry_lines_sum_debit": 0.01,
+   "entry_lines_sum_credit": 0.01,
+   "stored_description_matches": true,
+   "notes": [
+    "0.01 / 0.01 stored exactly."
+   ],
+   "finished_at_utc": "2026-09-08T20:45:32.248050+00:00"
+  },
+  {
+   "label": "zero-amount-lines",
+   "journal_entry_id": "028fb9dc-1df4-43d1-8b56-93b9ec6dd140",
+   "number": 9365,
+   "period_id": "202607",
+   "requested_status": "draft",
+   "stored_status": "draft",
+   "line_count": 2,
+   "requested_line_count": 2,
+   "description_length": 92,
+   "description_utf8_bytes": 92,
+   "request_http_status": 200,
+   "response_error": null,
+   "updated_at": "2026-09-08T20:45:32.932940Z",
+   "attempts": [
+    {
+     "status_sent": "draft",
+     "http": 200,
+     "path": "/businesses/bu-2/periods/202607/journal_entries/",
+     "error": null
+    }
+   ],
+   "entry_lines_sum_debit": 0.0,
+   "entry_lines_sum_credit": 0.0,
+   "stored_description_matches": true,
+   "notes": [
+    "single attempt only; not retried if rejected",
+    "API ACCEPTED the 0.00/0.00 entry (HTTP 200) and stored it as draft with both lines at 0.0. No rejection, no error envelope."
+   ],
+   "finished_at_utc": "2026-09-08T20:45:33.471568+00:00"
+  }
+ ],
+ "general_observations": [
+  "POST .../journal_entries/ (trailing slash) returns HTTP 200 (not 201) and echoes the full entry including journal_entry_id, number, updated_at and entry_lines.",
+  "PUT .../journal_entries/{id}/ (trailing slash) returns HTTP 200 and echoes the updated entry.",
+  "GET list envelope is {\"data\": [...]} and list items omit entry_lines and updated_at; use the single GET for those.",
+  "Response period_id is an integer (202607), date is echoed as 2026-07-15T00:00:00Z, currency MXN.",
+  "No 3xx/4xx/5xx responses occurred during seeding (see requests-log.jsonl).",
+  "Nothing was deleted; only POST/PUT on bu-2 journal entries in period 202607 plus GETs."
+ ],
+ "artifacts": {
+  "script": "/Users/anand/scratch/luca-mcp/.e2e-artifacts/seed/seed.py",
+  "client": "/Users/anand/scratch/luca-mcp/.e2e-artifacts/seed/liebre_client.py",
+  "request_log": "/Users/anand/scratch/luca-mcp/.e2e-artifacts/seed/requests-log.jsonl",
+  "per_case_results": "/Users/anand/scratch/luca-mcp/.e2e-artifacts/seed/results/<label>.json and <label>.entry.json (full GET payload)",
+  "chart_of_accounts_snapshot": "/Users/anand/scratch/luca-mcp/.e2e-artifacts/seed/coa-202607.json"
+ }
+}
