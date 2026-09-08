@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
-# Start (or restart) the dev mock IdP and the Luca MCP server in the background.
-# Logs: .e2e-artifacts/mock_idp.log and .e2e-artifacts/server.log
+# Start (or restart) the dev mock identity provider used as rai's Auth0 stand-in.
+#
+# rai (localhost:3030, started separately with its own dev.sh) must be configured with:
+#   MCP_OAUTH_IDP=auth0
+#   MCP_AUTH0_DOMAIN=http://localhost:9400
+#   MCP_AUTH0_CLIENT_ID=luca-rai-dev  MCP_AUTH0_CLIENT_SECRET=dev-secret-not-for-production
+# and the client with LUCA_RAI_URL=http://localhost:3030.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p .e2e-artifacts
 pkill -f "dev/mock_idp.py" 2>/dev/null || true
-pkill -f "uvicorn luca_mcp.main:create_app" 2>/dev/null || true
-sleep 0.5
+sleep 0.3
+export MOCK_IDP_CLIENT_ID="${MOCK_IDP_CLIENT_ID:-luca-rai-dev}"
 export MOCK_IDP_CLIENT_SECRET="${MOCK_IDP_CLIENT_SECRET:-dev-secret-not-for-production}"
-export MOCK_IDP_ACCESS_TTL="${MOCK_IDP_ACCESS_TTL:-86400}"
+export MOCK_IDP_ALLOWED_REDIRECTS="${MOCK_IDP_ALLOWED_REDIRECTS:-http://localhost:3030/oauth/callback,http://127.0.0.1:3030/oauth/callback}"
 nohup .venv/bin/python dev/mock_idp.py > .e2e-artifacts/mock_idp.log 2>&1 &
-sleep 1
-nohup .venv/bin/uvicorn luca_mcp.main:create_app --factory --host 127.0.0.1 --port "${LUCA_MCP_PORT:-8765}" --proxy-headers --forwarded-allow-ips='*' > .e2e-artifacts/server.log 2>&1 &
-for i in $(seq 1 30); do
-  if curl -fsS -o /dev/null http://localhost:8765/.well-known/oauth-authorization-server 2>/dev/null; then
-    echo "server up (mock idp :9400, luca :${LUCA_MCP_PORT:-8765})"; exit 0
-  fi
-  sleep 0.5
+for i in $(seq 1 20); do
+  curl -fsS -o /dev/null http://localhost:9400/.well-known/openid-configuration 2>/dev/null && { echo "mock idp up on :9400 (client ${MOCK_IDP_CLIENT_ID})"; exit 0; }
+  sleep 0.3
 done
-echo "server did not come up; see .e2e-artifacts/server.log" >&2; tail -30 .e2e-artifacts/server.log; exit 1
+echo "mock idp did not start; see .e2e-artifacts/mock_idp.log" >&2; exit 1
