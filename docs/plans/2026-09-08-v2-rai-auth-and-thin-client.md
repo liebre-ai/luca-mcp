@@ -1,5 +1,10 @@
 # Luca MCP v2 — auth and tools in rai, thin installable client
 
+> **Status (2026-09-08 evening):** implemented on `ant-rai` branch `luca-mcp/oauth-auth0-and-mcp-endpoints`
+> and this repository's `feat/thin-client-over-rai`; E2E-proven against the local rai and dev
+> Liebre (bu-2). Evidence and defects found: `2026-09-08-v2-build-log.md`.
+
+
 Date: 2026-09-08 (evening). Supersedes the remote-server design of `2026-09-08-luca-mcp-plan.md` for the
 auth and hosting model; the tool surface, shaping rules and error envelope carry over unchanged.
 

@@ -41,7 +41,8 @@ the repository.
 # Claude Code (add -s user to make it available in every project)
 claude mcp add luca -- uvx --from git+https://github.com/liebre-ai/luca-mcp luca-mcp
 
-# Codex CLI
+# Codex CLI (then raise its 60 s per-tool timeout so `login` can wait for the browser:
+# in ~/.codex/config.toml under [mcp_servers.luca] add `tool_timeout_sec = 300`)
 codex mcp add luca -- uvx --from git+https://github.com/liebre-ai/luca-mcp luca-mcp
 ```
 
