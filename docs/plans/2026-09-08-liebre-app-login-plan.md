@@ -99,10 +99,13 @@ What the user experiences:
 
 ### 4.1 ant-rai (branch `luca-mcp/login-through-liebre-app`)
 
-**Data model** — Alembic migration adding to `oauth_authorization_code`:
-`login_token_hash VARCHAR(128) NULL UNIQUE` (sha256 of the login-request token) and
-`login_expires_at TIMESTAMPTZ NULL`. `code`/`user_id` stay NULL until approval, which is what
-makes the token single-use (approve requires `code IS NULL AND used = false AND login_expires_at > now()`).
+**Data model — no migration.** The login-request token *is* the pending row's primary key
+(`uuid4`, 122 random bits, generated with `os.urandom`), which rai already creates for every
+authorization request since March 2026 and today keeps in its own session cookie. Expiry derives
+from the existing `created_at` (+10 minutes); single use from the existing `code IS NULL AND
+used = false`. Nothing about Liebre sessions or token lifetimes is copied into rai: the Liebre
+access token is verified once at approval and never stored. Net effect on state: one fewer
+moving part (the rai session cookie is no longer involved), zero new columns.
 
 **Token verification** — new `src/auth/liebre_token.py`:
 `verify_liebre_access_token(token) -> LiebreIdentity(sub, email, name)`.
@@ -191,8 +194,10 @@ support, build-log evidence, close PR #5.
 
 ## 5. Security notes
 
-- The login-request token is 32 random bytes, stored hashed, valid 10 minutes, single use,
-  bound to one pending row (client id, redirect URI, PKCE challenge, scope, state).
+- The login-request token is the pending row's random UUID, valid 10 minutes from `created_at`,
+  single use, bound to one pending row (client id, redirect URI, PKCE challenge, scope, state).
+  Someone who can read rai's database already sees the PKCE challenge and the code hash; the
+  token adds nothing to that exposure, so hashing it would buy nothing.
 - The authorization code still only ever goes to a loopback `redirect_uri` on the browser's own
   machine and still needs the PKCE verifier, so a request started by someone else cannot deliver
   tokens to them even if a user approves it. The page still says "solo continúa si acabas de
@@ -206,7 +211,7 @@ support, build-log evidence, close PR #5.
 
 ## 6. Rollout
 
-1. Merge rai; deploy runs the migration. Nothing changes for users until
+1. Merge rai (no migration). Nothing changes for users until
    `MCP_LUCA_LOGIN_UI_URL` is set (`https://app-dev.liebre.ai/luca/connect` on dev).
    New dev env: `LIEBRE_AUTH0_AUDIENCE` (value = the app's `AUTH0_AUDIENCE` for dev).
 2. Merge and deploy the app page to dev.
@@ -224,14 +229,34 @@ longer use Luca, by design.
 
 | Step | Effort |
 |---|---|
-| rai: verifier, migration, endpoints, policy cleanup, tests, harness E2E | ~1 day |
+| rai: verifier, endpoints, policy cleanup, tests, harness E2E (no migration) | ~1 day |
 | app: page, handlers, service, middleware `returnTo`, tests | ~½ day |
 | luca-mcp docs + evidence, dev walkthrough, PRs | ~½ day |
 
 Order: rai first (the app work needs its endpoints; the harness proves it without the app), app
 second, dev walkthrough third.
 
-## 8. Decisions taken in this plan (say so if you want them changed)
+## 8. What state rai keeps, and why it cannot be less
+
+rai keeps exactly the two tables it has had since March 2026 for its other MCP clients
+(`claude-code`): pending authorization requests (minutes) and refresh tokens (30 days,
+revocable by `logout`). They are not a copy of anything in the Liebre API or the app: the app's
+cookie session belongs to the browser, and the CLI on the user's laptop cannot use it, so
+*something* has to issue and be able to revoke the CLI's own credential. The only ways to make
+rai fully stateless are (a) a new Auth0 Native application so the CLI holds Auth0 tokens
+directly (the blocked option) or (b) handing the CLI a copy of the app's Auth0 refresh token,
+which cannot be revoked per device and is the token-sharing pattern the MCP guidance forbids.
+Moving the two tables into the Liebre API would relocate the same records, not remove them.
+
+Where the Liebre token is verified is the one open choice:
+
+- **rai verifies it against the tenant JWKS** (recommended): ~80 lines, one new env value
+  (`LIEBRE_AUTH0_AUDIENCE`), correct today regardless of the Liebre API's pending TODO.
+- **rai delegates to the Liebre API**: rai calls, say, `GET /accounting-firms` with the user's
+  token and trusts a 200, then reads `email` from the token. Zero Auth0 configuration in rai,
+  but the check is only as strong as the Liebre API's, which does not verify signatures yet.
+
+## 9. Decisions taken in this plan (say so if you want them changed)
 
 - One confirmation click on the connect page rather than auto-connect.
 - Google and staff access removed from the Luca login (PRs #1053 / luca-mcp #5 closed).
