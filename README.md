@@ -32,8 +32,9 @@ agent ──stdio──▶ luca-mcp (this repo) ──bearer──▶ rai /api/v
 - **Staff access (dev).** While rai's login provider is Google (Auth0 not yet configured), the
   browser always asks which Google account to use. A Liebre user acts as themselves; a staff
   account that is not a Liebre user gets read-only access to the firms in rai's
-  `MCP_STAFF_FIRM_IDS` (the sandbox firm `af-2` by default in dev, nothing in production), and
-  `whoami` says so (`session.mode = "staff"`). Anyone else is refused at login with the reason.
+  `MCP_STAFF_FIRM_IDS` (`*`, every firm and business, by default in dev; nothing in production),
+  and `whoami` says so (`session.mode = "staff"`, counts instead of the full list). Anyone else
+  is refused at login with the reason.
 - **Tool logic** (shapes, validation, hints) lives in rai; this client is thin on purpose so
   everyone gets fixes without reinstalling.
 
@@ -147,15 +148,15 @@ All optional, see `.env.example`: `LUCA_RAI_URL`, `LUCA_MCP_CLIENT_ID`, `LUCA_MC
 
 Server-side settings (ant-rai): `MCP_OAUTH_IDP=auth0`, `MCP_AUTH0_DOMAIN`, `MCP_AUTH0_CLIENT_ID`,
 `MCP_AUTH0_CLIENT_SECRET`, `MCP_OAUTH_ALLOWED_CLIENT_IDS` (default `claude-code,luca-mcp`),
-`MCP_STAFF_FIRM_IDS` (staff read access for Google logins without a Liebre account; empty
-disables it). The
+`MCP_STAFF_FIRM_IDS` (staff read access for Google logins without a Liebre account: firm ids,
+`*` for all, empty disables it). The
 Auth0 application rai needs: Regular Web Application, callback `https://<rai>/oauth/callback`,
 scopes `openid email profile`.
 
 ## Status and known limitations
 
-- Dev: works against the dev rai deployment with the Google staff login (staff access to the
-  sandbox firm for people who are not Liebre users yet). Customers need the Auth0 application
+- Dev: works against the dev rai deployment with the Google staff login (read-only staff access
+  to every firm and business for people who are not Liebre users yet). Customers need the Auth0 application
   and the `MCP_AUTH0_*` settings on that deployment.
 - Read-only; write tools are planned, not built. Excluded operations answer with a link to the
   platform.
