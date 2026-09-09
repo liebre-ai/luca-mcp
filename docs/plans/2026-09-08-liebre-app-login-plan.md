@@ -1,7 +1,19 @@
 # Luca MCP login through the Liebre app — implementation plan
 
-Date: 2026-09-08. Status: proposed, awaiting go.
-Supersedes the Google/staff login of ant-rai #1052/#1053 for the `luca-mcp` client.
+Date: 2026-09-08. Status: approved and implemented the same evening (Anand's choices: no rai
+migration, and rai asks the Liebre API about the token instead of verifying it itself, see
+section 8). Supersedes the Google/staff login of ant-rai #1052/#1053 for the `luca-mcp` client.
+
+Implementation notes (what differs from the text below):
+
+- rai checks the user's token by calling the Liebre API (`GET /accounting_firms` with that
+  bearer, the call the app makes on every page load) and reads the e-mail from the accepted
+  token (`endpoints/oauth/liebre_identity.py`). Liebre's 401 or 403 retires the request and
+  the agent hears the reason; a malformed token or a Liebre outage leaves it pending.
+- `POST /oauth/requests/{id}/deny` takes an optional `{"reason", "code"}` so the app can say
+  why it gave up (e.g. a session token without an e-mail).
+- The mock in `dev/mock_idp.py` plays both the app page and the Liebre check locally; rai is
+  pointed at it with `MCP_LUCA_LOGIN_UI_URL` and `MCP_LIEBRE_TOKEN_CHECK_URL`.
 
 ## 1. Goal
 
