@@ -425,6 +425,34 @@ def create_server(config: Config | None = None) -> FastMCP:
             accounting_firm_id=accounting_firm_id,
         )
 
+    @mcp.tool(name="list_article_69b_matches", annotations=READ_ONLY)
+    async def list_article_69b_matches(
+        business_id: str,
+        start_period_id: str,
+        end_period_id: str | None = None,
+        statuses: list[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        accounting_firm_id: str | None = None,
+    ) -> Any:
+        """Customers and suppliers of the business that appear in the SAT's Article 69-B list
+        (EFOS: taxpayers presumed or confirmed to invoice simulated operations), based on the
+        CFDIs of `start_period_id`..`end_period_id` (YYYYMM calendar months; `end_period_id`
+        defaults to the start). Returns the list version date, a summary (analyzed vs matched
+        RFCs, CFDI counts by posting status), MXN amounts, exposure percentages and one row per
+        matched RFC with its status history. `statuses` defaults to the risk-bearing ones,
+        `presunto` and `definitivo`; add `desvirtuado` and/or `sentencia_favorable` to include
+        taxpayers that were later cleared."""
+        return await get(
+            f"/businesses/{_segment(business_id, 'business_id')}/article_69b/matches",
+            start_period_id=start_period_id,
+            end_period_id=end_period_id,
+            statuses=statuses,
+            limit=limit,
+            offset=offset,
+            accounting_firm_id=accounting_firm_id,
+        )
+
     @mcp.tool(name="list_documents", annotations=READ_ONLY)
     async def list_documents(
         business_id: str,

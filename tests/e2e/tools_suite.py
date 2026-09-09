@@ -152,7 +152,7 @@ def case(name: str) -> Callable[[Callable[[], Any]], Callable[[], Any]]:
 # --------------------------------------------------------------------------------------------
 
 
-@case("tools: 18 tools listed, data tools read-only, session tools not destructive-by-default")
+@case("tools: 19 tools listed, data tools read-only, session tools not destructive-by-default")
 def t_tools() -> Any:
     tools = asyncio.run(h.mcp_list_tools(session()))
     names = {t["name"] for t in tools}
@@ -175,6 +175,7 @@ def t_tools() -> Any:
         "get_sat_archive",
         "list_documents",
         "get_document",
+        "list_article_69b_matches",
     }
     expect(names == expected, f"tool names differ: {sorted(names ^ expected)}")
     data_tools = [t for t in tools if t["name"] not in ("login", "logout")]
@@ -760,6 +761,71 @@ def t_documents() -> Any:
     return {"first": docs["items"][0]["file_name"], "types": len(docs["available_types"])}
 
 
+@case(
+    "list_article_69b_matches: bu-2 counterparties on the SAT 69-B list, statuses, paging, bad input"
+)
+def t_article_69b() -> Any:
+    args = {"business_id": BU, "start_period_id": "202501", "end_period_id": "202608"}
+    s = ok(call("list_article_69b_matches", args))
+    expect(s["summary"]["analyzed_rfcs"] >= 1, "counterparties analyzed")
+    expect(s["statuses"] == ["presunto", "definitivo"], f"default statuses {s['statuses']}")
+    expect(s["total"] == s["summary"]["matched_rfcs"], "total equals matched_rfcs")
+    expect(
+        all(m["status"] in ("presunto", "definitivo") for m in s["matches"]), "statuses honoured"
+    )
+    posted = s["amounts_mxn"]["analyzed_rfcs"]["income"]["posted"]["total"]
+    expect(isinstance(posted, (int, float)), f"amounts are numbers ({posted!r})")
+    expect(
+        isinstance(s["list_version_date"], str) and len(s["list_version_date"]) == 10,
+        "list version date is ISO",
+    )
+    expect(s["notes"] and s["platform_url"].startswith("https://"), "notes + platform link")
+    for m in s["matches"]:
+        expect(m["rfc"] and m["taxpayer_name"] and m["roles"], f"match shape {m['rfc']}")
+        expect(isinstance(m["cfdis"]["number_of_cfdis"], int), "cfdi counts")
+    one = ok(call("list_article_69b_matches", {**args, "limit": 1}))
+    expect(one["count"] <= 1 and one["has_more"] == (one["total"] > 1), "paging")
+    beyond = ok(call("list_article_69b_matches", {**args, "offset": 500}))
+    expect(beyond["count"] == 0 and beyond["total"] == s["total"], "offset beyond total")
+    all_four = ok(
+        call(
+            "list_article_69b_matches",
+            {**args, "statuses": ["presunto", "definitivo", "desvirtuado", "sentencia_favorable"]},
+        )
+    )
+    expect(
+        set(all_four["summary"]["matched_rfcs_by_status"])
+        == {"presunto", "definitivo", "desvirtuado", "sentencia_favorable"},
+        "all four statuses requested",
+    )
+    expect(all_four["total"] >= s["total"], "wider statuses never match fewer")
+    single = ok(call("list_article_69b_matches", {"business_id": BU, "start_period_id": "202608"}))
+    expect(
+        single["period"] == {"start_period_id": "202608", "end_period_id": "202608"}, "end defaults"
+    )
+    err(
+        call("list_article_69b_matches", {"business_id": BU, "start_period_id": "202513"}),
+        "invalid_input",
+    )
+    err(
+        call(
+            "list_article_69b_matches",
+            {"business_id": BU, "start_period_id": "202608", "end_period_id": "202501"},
+        ),
+        "invalid_input",
+    )
+    err(call("list_article_69b_matches", {**args, "statuses": ["bogus"]}), "invalid_input")
+    err(call("list_article_69b_matches", {**args, "limit": 0}), "invalid_input")
+    err(call("list_article_69b_matches", {**args, "business_id": "bu-1"}), "unknown_business")
+    return {
+        "analyzed": s["summary"]["analyzed_rfcs"],
+        "matched": s["total"],
+        "by_status": s["summary"]["matched_rfcs_by_status"],
+        "version": s["list_version_date"],
+        "exposure": s["exposure_percentage"],
+    }
+
+
 # --------------------------------------------------------------------------------------------
 # seeded bu-2 fixtures (never deleted: they are the evidence)
 # --------------------------------------------------------------------------------------------
@@ -1245,6 +1311,7 @@ def run_suite() -> int:
         t_sat_archives,
         t_sat_archive,
         t_documents,
+        t_article_69b,
         t_seed_many_lines,
         t_seed_unicode,
         t_seed_unbalanced,
