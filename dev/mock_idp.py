@@ -1,11 +1,23 @@
-"""Dev-only mock OpenID provider that stands in for the Liebre Auth0 tenant.
+"""Dev-only stand-in for the Liebre side of a Luca MCP login.
 
 WHY THIS EXISTS
-    The real "Luca MCP" Auth0 application is owned by the tenant admin. Until it exists, this
-    server lets the whole chain run locally: MCP client -> Luca MCP (OIDCProxy) -> this IdP ->
-    Liebre dev API. It mints RS256 access tokens shaped like Auth0's (``iss``, ``aud`` with the
-    Liebre API identifier, ``scope``, ``email``), which the dev Liebre API accepts because it
-    resolves users by the ``email`` claim.
+    A Luca login is completed by the Liebre app: rai sends the browser to the app's
+    ``/luca/connect`` page, the app calls rai back with the signed-in user's Liebre access token,
+    and rai asks the Liebre API whether that token is good. Locally this server plays both:
+
+    - ``/luca/connect`` (the app page): lets you pick an identity, mints an RS256 access token
+      shaped like Auth0's (``iss``, ``aud`` with the Liebre API identifier, ``email``) and calls
+      rai's ``/oauth/requests/{id}/approve`` (or ``/deny``) exactly as the app does, then sends
+      the browser to the agent's loopback callback.
+    - ``/accounting_firms`` (the Liebre API check rai makes): 200 for tokens it minted, 401 for
+      unknown people, 403 for a person without a firm.
+
+    rai must point at it: ``MCP_LUCA_LOGIN_UI_URL=http://localhost:9400/luca/connect`` and
+    ``MCP_LIEBRE_TOKEN_CHECK_URL=http://localhost:9400/accounting_firms``; this server reaches
+    rai at ``MOCK_RAI_URL`` (default http://localhost:3030).
+
+    It still serves the OpenID provider endpoints (``/authorize``, ``/oauth/token``, JWKS,
+    userinfo) used by rai's identity-provider path for other MCP clients.
 
 NEVER DEPLOY THIS. It has no real authentication: the login page lets you pick an identity.
 Only use identities that are synthetic dev accounts (default: ygreen@company.com, the account the
@@ -35,6 +47,7 @@ from html import escape
 from pathlib import Path
 from urllib.parse import urlencode
 
+import httpx
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -65,6 +78,10 @@ IDENTITIES = [
     if e.strip()
 ]
 KEY_PATH = Path(os.getenv("MOCK_IDP_KEY_PATH", ".e2e-artifacts/mock_idp_key.pem"))
+RAI_URL = os.getenv("MOCK_RAI_URL", "http://localhost:3030").rstrip("/")
+# What the Liebre API answers to rai's token check for these identities.
+UNKNOWN_IDENTITIES = {"unknown.user@yopmail.com"}  # 401: not a user_account (Liebre answers 401)
+NO_FIRM_IDENTITIES = {"nofirm@yopmail.com"}  # 403: user without accounting-firm access
 KID = "mock-idp-key-1"
 SUPPORTED_SCOPES = ["openid", "profile", "email", "offline_access"]
 
@@ -388,6 +405,129 @@ async def userinfo(request: Request) -> Response:
     return JSONResponse({k: claims[k] for k in ("sub", "email", "email_verified") if k in claims})
 
 
+# --------------------------------------------------------------------------------------------
+# The Liebre app's /luca/connect page and the Liebre API's token check (stand-ins)
+# --------------------------------------------------------------------------------------------
+
+
+def _render_connect(request_id: str, info: dict, error: str | None = None) -> HTMLResponse:
+    options = "".join(f'<option value="{escape(e)}">{escape(e)}</option>' for e in IDENTITIES)
+    err = f'<p style="color:#b3402e">{escape(error)}</p>' if error else ""
+    html = f"""<!doctype html><meta charset="utf-8"><title>Mock Liebre app: conectar Luca (dev)</title>
+<body style="font-family:system-ui;max-width:32rem;margin:3rem auto">
+<h2>Conectar Luca con tu asistente de IA <small style="color:#888">(mock app, dev only)</small></h2>
+<p>{escape(str(info.get("client_name", "")))} quiere acceder a Luca con tu cuenta de Liebre.<br>
+Scope: <code>{escape(str(info.get("scope", "")))}</code><br>Expira: <code>{escape(str(info.get("expires_at", "")))}</code></p>{err}
+<form method="post" action="/luca/connect">
+<input type="hidden" name="request" value="{escape(request_id)}">
+<label>Identity <select name="identity">{options}</select></label><br><br>
+<label>or type an e-mail <input name="custom_email" placeholder="someone@yopmail.com"></label><br><br>
+<button type="submit" name="decision" value="allow">Conectar</button>
+<button type="submit" name="decision" value="deny">Cancelar</button>
+</form></body>"""
+    return HTMLResponse(html)
+
+
+def _error_page(title: str, detail: str, status: int) -> HTMLResponse:
+    return HTMLResponse(f"<h3>{escape(title)}</h3><p>{escape(detail)}</p>", status_code=status)
+
+
+async def _rai(method: str, path: str, **kwargs) -> tuple[int, dict]:
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.request(method, f"{RAI_URL}{path}", **kwargs)
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"error": "bad_response", "error_description": response.text[:300]}
+    return response.status_code, body
+
+
+async def luca_connect(request: Request) -> Response:
+    """What the Liebre app does on /luca/connect: show the request, then approve/deny at rai
+    with the signed-in user's access token and send the browser to the agent's callback."""
+    if request.method == "GET":
+        request_id = request.query_params.get("request", "")
+        status, info = await _rai("GET", f"/oauth/requests/{request_id}")
+        if status != 200:
+            _event("connect_request_invalid", status=status, error=info.get("error"))
+            return _error_page(
+                "Esta solicitud no es válida", str(info.get("error_description", "")), status
+            )
+        _event("connect_shown", request_id=request_id, client=info.get("client_name"))
+        return _render_connect(request_id, info)
+
+    form = {k: str(v) for k, v in (await request.form()).items()}
+    request_id = form.get("request", "")
+    if form.get("decision") == "deny":
+        status, body = await _rai("POST", f"/oauth/requests/{request_id}/deny")
+        if status != 200:
+            return _error_page(
+                "No se pudo cancelar", str(body.get("error_description", "")), status
+            )
+        _event("connect_denied", request_id=request_id)
+        return RedirectResponse(body["redirect_to"], status_code=303)
+
+    identity = str(form.get("custom_email") or form.get("identity") or "").strip()
+    email: str | None = None if identity == "__no_email__" else identity
+    # The app's session token: minted here in place of Auth0.
+    access, _ = _mint_access_token(email, "openid email")
+    status, body = await _rai(
+        "POST",
+        f"/oauth/requests/{request_id}/approve",
+        headers={"Authorization": f"Bearer {access}"},
+    )
+    if status == 200:
+        _event("connect_" + str(body.get("status")), request_id=request_id, email=email)
+        return RedirectResponse(body["redirect_to"], status_code=303)
+    if status == 401 and body.get("error") == "invalid_token":
+        # The session did not carry a usable user token (app bug, not the person's fault):
+        # cancel so the agent hears it instead of waiting for its timeout.
+        _event("connect_invalid_token", request_id=request_id)
+        status, denied = await _rai(
+            "POST",
+            f"/oauth/requests/{request_id}/deny",
+            json={
+                "reason": "The Liebre session did not provide an e-mail address",
+                "code": "invalid_session",
+            },
+        )
+        if status == 200:
+            return RedirectResponse(denied["redirect_to"], status_code=303)
+    _event("connect_failed", request_id=request_id, status=status, error=body.get("error"))
+    return _error_page(
+        "No se pudo conectar", f"{body.get('error')}: {body.get('error_description', '')}", status
+    )
+
+
+async def accounting_firms(request: Request) -> Response:
+    """The Liebre API call rai makes to check a user token (GET /accounting_firms)."""
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+    try:
+        claims = jwt.decode(
+            auth.split(" ", 1)[1],
+            PRIVATE_KEY.public_key(),
+            algorithms=["RS256"],
+            audience=AUDIENCE,
+            issuer=f"{ISSUER}/",
+        )
+    except jwt.PyJWTError as exc:
+        _event("token_check", result="invalid", error=str(exc))
+        return JSONResponse({"detail": "Invalid authentication token"}, status_code=401)
+    email = claims.get("email")
+    if not email or email in UNKNOWN_IDENTITIES:
+        _event("token_check", result="unknown_user", email=email)
+        return JSONResponse({"detail": "Error validating user"}, status_code=401)
+    if email in NO_FIRM_IDENTITIES:
+        _event("token_check", result="no_firm", email=email)
+        return JSONResponse(
+            {"detail": "User does not have access to any accounting firm"}, status_code=403
+        )
+    _event("token_check", result="ok", email=email)
+    return JSONResponse({"data": [{"accounting_firm_id": "af-2", "legal_name": "Sandbox"}]})
+
+
 async def test_events(_: Request) -> JSONResponse:
     return JSONResponse({"events": EVENTS, "refresh_tokens_active": len(REFRESH_TOKENS)})
 
@@ -418,6 +558,8 @@ app = Starlette(
         Route("/oauth/token", token, methods=["POST"]),
         Route("/oauth/revoke", revoke, methods=["POST"]),
         Route("/userinfo", userinfo),
+        Route("/luca/connect", luca_connect, methods=["GET", "POST"]),
+        Route("/accounting_firms", accounting_firms),
         Route("/__test/events", test_events),
         Route("/__test/mint", test_mint),
         Route("/__test/expire_all_refresh", test_expire_all_refresh, methods=["POST"]),
@@ -430,7 +572,7 @@ if __name__ == "__main__":
     print(
         f"mock IdP issuer={ISSUER}/ client_id={CLIENT_ID} audience={AUDIENCE} access_ttl={ACCESS_TTL}s"
     )
-    print(f"identities={IDENTITIES} allowed_redirects={ALLOWED_REDIRECTS}")
+    print(f"identities={IDENTITIES} allowed_redirects={ALLOWED_REDIRECTS} rai={RAI_URL}")
     uvicorn.run(
         app, host="127.0.0.1", port=PORT, log_level=os.getenv("LOG_LEVEL", "warning").lower()
     )

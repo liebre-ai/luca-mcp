@@ -6,35 +6,36 @@ your Liebre account through the browser, and gives Claude Code, Codex, Cursor an
 clients read-only tools over your businesses: periods, journal entries, financial reports, VAT
 determination, SAT filings, SAT archives and documents, always with your own permissions.
 
-Design: `docs/plans/2026-09-08-v2-rai-auth-and-thin-client.md`. The server side lives in
-`ant-rai` (`src/endpoints/oauth` is the login server, `src/endpoints/mcp` the tool endpoints).
+Design: `docs/plans/2026-09-08-v2-rai-auth-and-thin-client.md` and, for the login through the
+Liebre app, `docs/plans/2026-09-08-liebre-app-login-plan.md`. The server side lives in `ant-rai`
+(`src/endpoints/oauth` is the login server, `src/endpoints/mcp` the tool endpoints); the login
+page lives in the Liebre app (`/luca/connect`).
 
 ## How it works
 
 ```
 agent ──stdio──▶ luca-mcp (this repo) ──bearer──▶ rai /api/v1/mcp/* ──machine token + User-Id──▶ Liebre API
                      │
-                     └── login: browser → rai /oauth/authorize → Auth0 (Liebre login) → loopback callback
+                     └── login: browser → rai /oauth/authorize → Liebre app /luca/connect (your normal
+                         Liebre login if needed, then one click) → app approves at rai with your
+                         Liebre session → loopback callback
 ```
 
 - **Login** is OAuth 2.1 authorization code with PKCE against rai's own authorization server.
   The client is the pre-registered public client `luca-mcp`; it listens once on
-  `http://127.0.0.1:<random port>/callback` for the round trip (RFC 8252). rai authenticates you
-  through the Liebre Auth0 tenant and only accepts an e-mail that is an active Liebre account.
+  `http://127.0.0.1:<random port>/callback` for the round trip (RFC 8252). rai hands the request
+  to the Liebre app: you log in there exactly as always (nothing to do if you already are), see
+  who is about to be connected, and click **Conectar**. The app tells rai, rai asks the Liebre
+  API whether your session is good, and only an active Liebre account gets through. Cancelling,
+  or a refusal, reaches the agent at once with the reason.
 - **Credentials**: rai issues a 30-minute access token and a rotating refresh token. They are kept
   in the OS keychain (macOS Keychain, Windows Credential Manager, Secret Service) with a file
-  fallback at `~/.config/luca-mcp/credentials.json` (mode 0600). Nothing from Auth0 ever reaches
-  your machine. Tokens refresh automatically; `logout` revokes them.
+  fallback at `~/.config/luca-mcp/credentials.json` (mode 0600). Your Liebre session never
+  reaches your machine's agent. Tokens refresh automatically; `logout` revokes them.
 - **Access control** happens in rai on every call: your e-mail is resolved to your Liebre account,
   the account must be active, and the business must be linked to you with `allowed` status. rai
   then calls the Liebre API with its machine token and your `User-Id`. Deleted businesses are
   hidden.
-- **Staff access (dev).** While rai's login provider is Google (Auth0 not yet configured), the
-  browser always asks which Google account to use. A Liebre user acts as themselves; a staff
-  account that is not a Liebre user gets read-only access to the firms in rai's
-  `MCP_STAFF_FIRM_IDS` (`*`, every firm and business, by default in dev; nothing in production),
-  and `whoami` says so (`session.mode = "staff"`, counts instead of the full list). Anyone else
-  is refused at login with the reason.
 - **Tool logic** (shapes, validation, hints) lives in rai; this client is thin on purpose so
   everyone gets fixes without reinstalling.
 
@@ -122,11 +123,12 @@ SAT archive `details` at `max_detail_rows` (default 100). Reports that answer
 
 ```bash
 uv sync                                    # Python 3.12, fastmcp 4.0.3 pinned
-./dev/run_local.sh                         # dev mock IdP (:9400) standing in for Auth0
-# ant-rai: `uv run fastapi dev src/main.py --port 3030` with MCP_OAUTH_IDP=auth0,
-#          MCP_AUTH0_DOMAIN=http://localhost:9400, MCP_AUTH0_CLIENT_ID=luca-rai-dev, MCP_AUTH0_CLIENT_SECRET=...
+MOCK_RAI_URL=http://localhost:3030 ./dev/run_local.sh   # dev stand-in (:9400) for the Liebre app page + Liebre API token check
+# ant-rai: `uv run fastapi dev src/main.py --port 3030` with
+#          MCP_LUCA_LOGIN_UI_URL=http://localhost:9400/luca/connect
+#          MCP_LIEBRE_TOKEN_CHECK_URL=http://localhost:9400/accounting_firms
 export LUCA_RAI_URL=http://localhost:3030 LUCA_MCP_CREDENTIAL_STORE=file LUCA_MCP_CONFIG_DIR=.e2e-artifacts/config
-uv run python tests/e2e/harness.py login   # scripted browser through rai and the mock IdP
+uv run python tests/e2e/harness.py login   # scripted browser through rai and the mock app page
 uv run python tests/e2e/harness.py tools
 uv run python tests/e2e/harness.py call get_trial_balance '{"business_id":"bu-2","start_period_id":"202608"}'
 uv run python tests/e2e/harness.py call whoami '{}' --stdio   # same, through `uv run luca-mcp`
@@ -134,8 +136,10 @@ uv run python tests/e2e/tools_suite.py     # 36 cases against dev bu-2 (use --on
 ```
 
 `.mcp.json` registers this checkout as `luca-dev` for Claude Code (`uv run luca-mcp` against the
-local rai). `dev/mock_idp.py` is a **dev-only** OpenID provider that stands in for Auth0 in
-rai's `MCP_AUTH0_DOMAIN`; it has no real authentication and must never be deployed. The seeded
+local rai). `dev/mock_idp.py` is **dev-only**: it plays the Liebre app's `/luca/connect` page
+(pick an identity, it approves at rai with a token it mints) and the Liebre API's token check
+(`/accounting_firms`: 200 for its own tokens, 401 for `unknown.user@yopmail.com`, 403 for
+`nofirm@yopmail.com`). It has no real authentication and must never be deployed. The seeded
 bu-2 fixtures the suite checks are described in `tests/e2e/fixtures/bu-2-seed-manifest.json`.
 
 Nothing under `.e2e-artifacts/` is committed.
@@ -146,18 +150,18 @@ All optional, see `.env.example`: `LUCA_RAI_URL`, `LUCA_MCP_CLIENT_ID`, `LUCA_MC
 `LUCA_MCP_LOGIN_TIMEOUT`, `LUCA_MCP_CONFIG_DIR`, `LUCA_MCP_CREDENTIAL_STORE` (`auto` | `file`;
 `file` skips the OS keychain for CI and headless machines).
 
-Server-side settings (ant-rai): `MCP_OAUTH_IDP=auth0`, `MCP_AUTH0_DOMAIN`, `MCP_AUTH0_CLIENT_ID`,
-`MCP_AUTH0_CLIENT_SECRET`, `MCP_OAUTH_ALLOWED_CLIENT_IDS` (default `claude-code,luca-mcp`),
-`MCP_STAFF_FIRM_IDS` (staff read access for Google logins without a Liebre account: firm ids,
-`*` for all, empty disables it). The
-Auth0 application rai needs: Regular Web Application, callback `https://<rai>/oauth/callback`,
-scopes `openid email profile`.
+Server-side settings (ant-rai), all with working defaults: `MCP_LUCA_LOGIN_UI_URL` (the app's
+connect page; derived from `LIEBRE_APP_BASE_URL` / the environment as `<app>/luca/connect`),
+`MCP_LIEBRE_TOKEN_CHECK_URL` (the Liebre API call rai makes to check a session token; derived
+from the environment's Liebre API as `<api>/accounting_firms`), `MCP_OAUTH_ALLOWED_CLIENT_IDS`
+(default `claude-code,luca-mcp`). No Auth0 application is needed for Luca: the Liebre app's own
+login is the login.
 
 ## Status and known limitations
 
-- Dev: works against the dev rai deployment with the Google staff login (read-only staff access
-  to every firm and business for people who are not Liebre users yet). Customers need the Auth0 application
-  and the `MCP_AUTH0_*` settings on that deployment.
+- Login needs the Liebre app's `/luca/connect` page deployed in the same environment as rai
+  (ant-liebre-app); until then rai sends the browser to a page that does not exist yet. Only
+  people with a Liebre account (active, member of a firm) can use Luca.
 - Read-only; write tools are planned, not built. Excluded operations answer with a link to the
   platform.
 - Deep links point to the platform root until the frontend routes are confirmed.

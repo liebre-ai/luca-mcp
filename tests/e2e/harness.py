@@ -102,6 +102,10 @@ def drive_authorize_url(
                 fields["identity"] = identity
                 fields["decision"] = login_decision
                 log.append(f"POST mock login ({identity}, {login_decision})")
+            elif "request" in fields:  # mock Liebre app /luca/connect page
+                fields["identity"] = identity
+                fields["decision"] = login_decision
+                log.append(f"POST mock connect ({identity}, {login_decision})")
             else:
                 raise HarnessError(f"unrecognised page at {url[:100]}: {html[:200]}")
             response = http.post(action, data=fields)

@@ -910,16 +910,18 @@ def t_seed_statuses() -> Any:
 # --------------------------------------------------------------------------------------------
 
 
-@case("login refused: e-mail unknown to Liebre is rejected by rai, client reports the reason")
+@case(
+    "login refused: e-mail unknown to Liebre (Liebre rejects the token), client reports the reason"
+)
 def t_unknown_user() -> Any:
     message, seconds = refused_login(UNKNOWN)
-    expect("not a Liebre user" in message, f"reason missing: {message[:200]}")
+    expect("did not accept the login token" in message, f"reason missing: {message[:200]}")
     expect(seconds < 30, f"refusal took {seconds:.0f}s (client must not wait for its timeout)")
     expect(oauth.load_tokens(cfg(UNKNOWN)) is None, "no credentials stored")
     return {"message": message[:160], "seconds": round(seconds, 1)}
 
 
-@case("login refused: identity without an e-mail claim is rejected (fail closed)")
+@case("login refused: session token without an e-mail claim is rejected (fail closed)")
 def t_no_email() -> Any:
     message, seconds = refused_login(NO_EMAIL)
     expect("e-mail" in message.lower(), f"reason missing: {message[:200]}")
@@ -935,7 +937,7 @@ def t_disabled_user() -> Any:
     return {"message": message[:160], "seconds": round(seconds, 1)}
 
 
-@case("login refused: user declines at the identity provider -> access_denied, no credentials")
+@case("login refused: user cancels on the Liebre app page -> access_denied, no credentials")
 def t_user_declines() -> Any:
     config = cfg("declines", login_timeout=60.0)
     oauth.clear_tokens(config)
