@@ -40,7 +40,9 @@ but do not assume it reflects a role restriction.
    `search_journal_entries` for text search across periods, `get_journal_entry` for lines.
 5. SAT side: `list_declaraciones` for filing status per month; `list_sat_archives` and
    `get_sat_archive` for what was declared (DIOT totals/details, constancia, opinión);
-   `list_documents` / `get_document` for the files.
+   `list_documents` / `get_document` for the files; `list_article_69b_matches` to check the
+   period's customers and suppliers against the SAT 69-B list (EFOS: presumed or confirmed
+   simulated operations) with amounts and exposure.
 6. Errors come as `{"error": {"code", "message", "hint", ...}}`. `not_authenticated` /
    `login_expired`: call `login` (or the user runs `luca-mcp login`). `unknown_business`: call `list_businesses`. `forbidden`: the user's
    Liebre role lacks the permission; point to the platform. `upstream_unavailable`: retry later.

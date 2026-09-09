@@ -97,6 +97,7 @@ Data tools, all read-only and annotated as such:
 | `list_sat_archives(business_id, extraction_type?, status?, requested_from?, requested_to?, limit?, offset?)` | SAT extraction runs with `available_types`. |
 | `get_sat_archive(business_id, sat_archive_id? \| extraction_type?, include_extracted_data?, max_detail_rows?)` | Structured `extracted_data` (e.g. declared DIOT totals and per-supplier details) plus files. |
 | `list_documents(business_id, document_type?, year?, month?, limit?, offset?)` | Stored fiscal documents with `available_types`. |
+| `list_article_69b_matches(business_id, start_period_id, end_period_id?, statuses?, limit?, offset?)` | Customers/suppliers on the SAT 69-B list (EFOS) for the period's CFDIs: summary, MXN amounts, exposure, one row per matched RFC with status history. `statuses` defaults to `presunto, definitivo`. |
 | `get_document(business_id, document_id)` | Metadata and a short-lived signed `download_url`. |
 
 Every business-scoped tool accepts an optional `accounting_firm_id` for users whose business is
