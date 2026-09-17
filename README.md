@@ -136,6 +136,20 @@ uv run python tests/e2e/harness.py call whoami '{}' --stdio   # same, through `u
 uv run python tests/e2e/tools_suite.py     # 36 cases against dev bu-2 (use --only <substring>)
 ```
 
+Layout of `src/luca_mcp/`: `server.py` assembles the FastMCP server; the tools live in `tools/`,
+one module per Liebre domain (`session`, `businesses`, `reports`, `journal_entries`, `sat`,
+`documents`), each exposing `register(mcp, client)`; `tools/_common.py` holds the annotations and
+the path-segment check; `api.py` is the HTTP client for rai (`fetch` for tools); `oauth.py` the
+browser login and token storage; `errors.py` the error envelope; `prompts/` the two prompts.
+
+To add a tool: write it in the module of its domain (or in a new module added to `MODULES` in
+`tools/__init__.py`, whose order is the order agents see), decorate it with
+`@mcp.tool(name=..., annotations=READ_ONLY)`, forward with `await client.fetch(path, **params)`
+after passing every path identifier through `segment()`, and keep the docstring as specific as
+the rai endpoint (it is the description the agent reads). Then add it to `EXPECTED_TOOLS` in
+`tests/unit/test_tool_registry.py`, to `t_tools` in `tests/e2e/tools_suite.py` with a case against
+bu-2, and to the table above. `uv run pytest` runs the offline registry checks.
+
 `.mcp.json` registers this checkout as `luca-dev` for Claude Code (`uv run luca-mcp` against the
 local rai). `dev/mock_idp.py` is **dev-only**: it plays the Liebre app's `/luca/connect` page
 (pick an identity, it approves at rai with a token it mints) and the Liebre API's token check
