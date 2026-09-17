@@ -5,27 +5,49 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 
 from luca_mcp import __version__, oauth
 from luca_mcp.api import RaiClient
 from luca_mcp.errors import NOT_LOGGED_IN, LucaError
 from luca_mcp.tools._common import READ_ONLY, SESSION
 
+# Seconds between progress notifications while the browser login is pending.
+LOGIN_PROGRESS_INTERVAL = 5.0
+
 
 def register(mcp: FastMCP, client: RaiClient) -> None:
     config = client.config
 
     @mcp.tool(name="login", annotations=SESSION)
-    async def login() -> dict[str, Any]:
+    async def login(ctx: Context | None = None) -> dict[str, Any]:
         """Log in to Luca with your Liebre account. Opens the browser; call this when a tool says you
         are not logged in or your session expired. Blocks until the login completes (up to 5 min).
         Returns who you are logged in as."""
         urls: list[str] = []
         try:
-            tokens = await asyncio.to_thread(
-                oauth.login, config, open_browser=True, on_url=urls.append
+            task = asyncio.ensure_future(
+                asyncio.to_thread(oauth.login, config, open_browser=True, on_url=urls.append)
             )
+            elapsed = 0.0
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=LOGIN_PROGRESS_INTERVAL)
+                if done:
+                    break
+                elapsed += LOGIN_PROGRESS_INTERVAL
+                if ctx is not None:
+                    message = (
+                        f"Waiting for the browser login ({elapsed:g}s of {config.login_timeout:g}s)"
+                    )
+                    if urls:
+                        message += f"; if no browser opened, open: {urls[0]}"
+                    try:
+                        await ctx.report_progress(
+                            progress=elapsed, total=config.login_timeout, message=message
+                        )
+                    except Exception:
+                        pass
+            tokens = task.result()
         except oauth.LoginError as exc:
             raise LucaError(
                 {
