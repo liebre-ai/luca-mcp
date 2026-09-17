@@ -17,8 +17,9 @@ from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from luca_mcp import __version__, oauth
-from luca_mcp.api import NOT_LOGGED_IN, LucaError, RaiClient
+from luca_mcp.api import RaiClient
 from luca_mcp.config import Config, load_config
+from luca_mcp.errors import NOT_LOGGED_IN, LucaError
 from luca_mcp.prompts import luca as prompts
 
 logger = logging.getLogger("luca_mcp.server")

@@ -15,8 +15,9 @@ import sys
 import time
 
 from luca_mcp import __version__, oauth
-from luca_mcp.api import LucaError, RaiClient
+from luca_mcp.api import RaiClient
 from luca_mcp.config import load_config
+from luca_mcp.errors import LucaError
 
 
 def _print(obj: object) -> None:
