@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -26,6 +27,15 @@ class RaiClient:
 
     def close(self) -> None:
         self._http.close()
+
+    @property
+    def config(self) -> Config:
+        return self._config
+
+    async def fetch(self, path: str, **params: Any) -> Any:
+        """`get` for async tools: the blocking call runs in a worker thread so the event loop keeps
+        serving other tool calls. ``None`` parameters are dropped."""
+        return await asyncio.to_thread(self.get, path, params)
 
     # ---------------------------------------------------------------------------------------
     def _tokens(self) -> oauth.Tokens:
