@@ -48,8 +48,9 @@ the repository.
 # Claude Code (add -s user to make it available in every project)
 claude mcp add luca -- uvx --from git+https://github.com/liebre-ai/luca-mcp luca-mcp
 
-# Codex CLI (then raise its 60 s per-tool timeout so `login` can wait for the browser:
-# in ~/.codex/config.toml under [mcp_servers.luca] add `tool_timeout_sec = 300`)
+# Codex CLI (then, in ~/.codex/config.toml under [mcp_servers.luca], add
+# `tool_timeout_sec = 300` so `login` can wait for the browser, and
+# `startup_timeout_sec = 60` so the first run, which installs the package, is not cut off at 10 s)
 codex mcp add luca -- uvx --from git+https://github.com/liebre-ai/luca-mcp luca-mcp
 ```
 
@@ -72,6 +73,16 @@ The client talks to the dev Luca server by default. Point it elsewhere with `LUC
 (for example `http://localhost:3030` for a local rai), passed as an env entry in the MCP config.
 
 Start a session with the `luca_guidelines` and `luca_navigation` prompts, then `list_businesses`.
+In Claude Code they appear as `/mcp__luca__luca_guidelines` and `/mcp__luca__luca_navigation`.
+
+### Updating and pinning
+
+`uvx` caches the resolved commit of the repository, so a new version does not reach an installed
+client until it runs `uvx --refresh --from git+https://github.com/liebre-ai/luca-mcp luca-mcp --help`
+and reconnects the server in the agent. To stay on a known release instead, pin a tag:
+`git+https://github.com/liebre-ai/luca-mcp@v0.3.0`. Tags follow the version in `pyproject.toml`
+(`vX.Y.Z`, created when a version is released); `whoami` reports the running version as
+`client_version`.
 
 ## Tools
 
@@ -102,7 +113,17 @@ Data tools, all read-only and annotated as such:
 
 Every business-scoped tool accepts an optional `accounting_firm_id` for users whose business is
 linked to more than one firm. Identifiers are validated locally (one URL segment, no slashes or
-whitespace) and then against your own access list in rai before any Liebre call.
+whitespace) and then against your own access list in rai before any Liebre call. Every parameter
+carries a description in the tool schema; the tool description says when to use the tool and what
+it returns.
+
+### Toolsets
+
+Agents that cap the number of active tools (Cursor allows about 40 across all servers) can load a
+subset: `LUCA_MCP_TOOLSETS=reports,sat` in the server's `env` exposes only those modules. The
+toolsets are the modules of `src/luca_mcp/tools/`: `businesses`, `reports`, `journal_entries`,
+`sat` and `documents`; `login`, `logout` and `whoami` are always available. An unknown name stops
+the server at startup with the list of known ones.
 
 ### Errors
 
@@ -163,7 +184,8 @@ Nothing under `.e2e-artifacts/` is committed.
 
 All optional, see `.env.example`: `LUCA_RAI_URL`, `LUCA_MCP_CLIENT_ID`, `LUCA_MCP_TIMEOUT`,
 `LUCA_MCP_LOGIN_TIMEOUT`, `LUCA_MCP_CONFIG_DIR`, `LUCA_MCP_CREDENTIAL_STORE` (`auto` | `file`;
-`file` skips the OS keychain for CI and headless machines).
+`file` skips the OS keychain for CI and headless machines), `LUCA_MCP_TOOLSETS` (comma-separated
+toolsets to expose; default all).
 
 Server-side settings (ant-rai), all with working defaults: `MCP_LUCA_LOGIN_UI_URL` (the app's
 connect page; derived from `LIEBRE_APP_BASE_URL` / the environment as `<app>/luca/connect`),
