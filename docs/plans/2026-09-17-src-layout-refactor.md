@@ -89,3 +89,21 @@ to a thin client folded everything into `server.py`.
   change and from the branch after it; the diff must be empty.
 - `tests/e2e/tools_suite.py` against the local rai on `:3030` (baseline run on `main` first,
   then on the branch): 36/36, including the real `uv run luca-mcp` stdio process case.
+
+## Evidence (2026-09-17, branch `refactor/src-layout`)
+
+- `ruff check` and `ruff format --check` clean; `uv run pytest` 4 passed
+  (`tests/unit/test_tool_registry.py`, no rai needed).
+- Surface diff: the `list_tools` / `list_prompts` JSON (19 tools, 2 prompts: names, order,
+  descriptions, input schemas, annotations, `meta`, prompt texts) is byte-identical before and
+  after; `INSTRUCTIONS` is identical; each tool's decorated source is identical after the two
+  renames (`await get(` -> `await client.fetch(`, `_segment(` -> `segment(`).
+- `tests/e2e/tools_suite.py` against the local rai on `:3030`: baseline on `main` 28/37, branch
+  28/37 with the same nine failures for the same reasons, all environment or data drift on this
+  machine, none in the client: this rai now sends fresh `luca-mcp` logins to the real Auth0 tenant,
+  so the scripted browser cannot drive the refused-login, session-lifecycle and logout-revoke
+  cases (6); bu-2's last open period changed (`get_business`, `list_periods`); `jd@yopmail.com`
+  is now also allowed on bu-1385 (restricted identity). The 28 passing cases include the real
+  `uv run luca-mcp` stdio process and the not-logged-in stdio case.
+- By hand through the real stdio process (`tests/e2e/harness.py call ... --stdio`): `whoami`
+  logged in; `get_trial_balance(bu-2, 202608)` 35 rows, total debits equal total credits.
