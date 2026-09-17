@@ -37,6 +37,8 @@ EXPECTED_TOOLS = [
     "list_sat_archives",
     "get_sat_archive",
     "list_article_69b_matches",
+    "list_imss_emisiones",
+    "get_imss_emision",
     "list_documents",
     "get_document",
 ]
