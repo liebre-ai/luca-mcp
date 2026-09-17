@@ -26,6 +26,14 @@ but do not assume it reflects a role restriction.
 - CFDI: the SAT electronic invoice (UUID). DIOT: monthly informative return of operations with
   suppliers. Declaración mensual de IVA/ISR/IEPS: the monthly federal tax filing. SAT archive: one
   extraction Luca made from the SAT portal (structured data + PDF/XLSX files).
+- IMSS: the social-security institute. Registro patronal: the employer's IMSS registration (a
+  business can hold several). IDSE: the IMSS employer portal Luca reads. Emisión: the cédula de
+  determinación de cuotas the IMSS issues per registration and period: EMA (mensual, one month,
+  IMSS cuotas by branch) and EBA (bimestral, one bimestre identified by its even closing month,
+  RCV plus INFONAVIT). Per concept, `patronal` is what the employer pays, `obrera` what is
+  withheld from workers, `suma` the total; `saldos` are the portal's balances and
+  `fecha_limite_pago` the payment deadline (the 17th of the following month). Asegurados are
+  the workers on the cédula, identified by NSS: personal data, returned only on request.
 - Amounts are in the business currency (usually MXN) as decimal numbers, exactly as Liebre
   returns them. Do not round or convert unless asked; quote the period and the tool you used.
 
@@ -43,7 +51,12 @@ but do not assume it reflects a role restriction.
    `list_documents` / `get_document` for the files; `list_article_69b_matches` to check the
    period's customers and suppliers against the SAT 69-B list (EFOS: presumed or confirmed
    simulated operations) with amounts and exposure.
-6. Errors come as `{"error": {"code", "message", "hint", ...}}`. `not_authenticated` /
+6. IMSS side: `list_imss_emisiones` for the year's calendar of archived cédulas per registro
+   patronal (add `with_amounts` for the figures), `get_imss_emision` for one cédula (workers
+   only with `include_workers`). Luca cannot start an extraction: the user asks for it in the
+   Luca chat ("emisión del IMSS de agosto 2026") or the platform once the IMSS certificate is
+   configured.
+7. Errors come as `{"error": {"code", "message", "hint", ...}}`. `not_authenticated` /
    `login_expired`: call `login` (or the user runs `luca-mcp login`). `unknown_business`: call `list_businesses`. `forbidden`: the user's
    Liebre role lacks the permission; point to the platform. `upstream_unavailable`: retry later.
 
@@ -83,6 +96,18 @@ NAVIGATION = """# Luca navigation: workflows
 - Know the text? `search_journal_entries(business_id, q="...")`.
 - Know the month? `list_journal_entries_for_period(..., q=..., status=..., date_from=..., date_to=...)`.
 - Then `get_journal_entry(business_id, journal_entry_id)` for lines with account numbers and CFDIs.
+
+## Review the IMSS cuotas of a period
+1. `list_imss_emisiones(business_id, year, with_amounts=true)` -> per registro patronal, which
+   months have an archived EMA and, in even months, EBA; `missing` months are gaps to raise,
+   `future` months are not issued yet (the IMSS issues a month early in the next month).
+2. `get_imss_emision(business_id, tipo="mensual", year=..., month=...)` (and `tipo="bimestral"`
+   with the even closing month) -> `conceptos` (patronal / obrera / suma by branch), `saldos`,
+   `fecha_limite_pago`, cotizantes and the files; quote the archive's period and registration.
+3. Only when the user needs to reconcile with payroll: call again with `include_workers=true`
+   (capped by `max_workers`); the rows carry the full NSS, so keep them to what was asked.
+4. No archive for the period? Say so and explain that the emisión is extracted from the Luca
+   chat or the platform; do not present another period's figures as if they were this one's.
 
 ## Audit one account across time
 - `get_trial_balance(..., levels_deep="all")` for the account's balance per period range;
