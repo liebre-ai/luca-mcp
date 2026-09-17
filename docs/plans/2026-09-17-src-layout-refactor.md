@@ -107,3 +107,11 @@ to a thin client folded everything into `server.py`.
   `uv run luca-mcp` stdio process and the not-logged-in stdio case.
 - By hand through the real stdio process (`tests/e2e/harness.py call ... --stdio`): `whoami`
   logged in; `get_trial_balance(bu-2, 202608)` 35 rows, total debits equal total credits.
+
+## Follow-up on the same branch
+
+The audit in `docs/plans/2026-09-17-mcp-best-practices-audit.md` added, on top of this layout:
+parameter descriptions in every tool schema (shared wording in `tools/_common.py`), the
+`LUCA_MCP_TOOLSETS` selection built on `MODULES`, progress notifications in `login`, no fastmcp
+banner, README updates and version 0.3.0. The tool surface stayed identical apart from the
+descriptions.
