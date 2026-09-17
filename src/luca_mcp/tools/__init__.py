@@ -14,9 +14,9 @@ from collections.abc import Iterable
 from fastmcp import FastMCP
 
 from luca_mcp.api import RaiClient
-from luca_mcp.tools import businesses, documents, journal_entries, reports, sat, session
+from luca_mcp.tools import businesses, documents, imss, journal_entries, reports, sat, session
 
-MODULES = (session, businesses, reports, journal_entries, sat, documents)
+MODULES = (session, businesses, reports, journal_entries, sat, imss, documents)
 ALWAYS_ON = (session,)
 TOOLSETS = {module.__name__.rsplit(".", 1)[-1]: module for module in MODULES}
 

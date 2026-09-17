@@ -46,6 +46,12 @@ RESTRICTED_BUSINESS = "bu-1328"
 DISABLED = "Tom.Hagen.10@yopmail.com"  # user_account_status = disabled in Liebre dev
 UNKNOWN = "unknown.user@yopmail.com"  # not a Liebre user
 NO_EMAIL = "__no_email__"  # identity provider returns no e-mail claim
+# IMSS emisiones seeded on bu-2 by the ant-rai session (2026-09-17, LUCA-MCP-E2E, never deleted):
+# registro Z9999999901, synthetic RFC AAA010101AAA, period 2026-08 (EMA month 8, EBA bimestre 4).
+IMSS_REGISTRO = "Z9999999901"
+IMSS_EMA_ID = "ebf6312b-61b8-410d-adf7-d0ffa6c19b26"
+IMSS_EMA_DOC = "5fa6698c-d370-4e59-8cf6-d26698b6cb6c"
+IMSS_EBA_ID = "8912df36-50c1-4267-8ae0-2b2b2adbf2a3"
 
 results: list[dict[str, Any]] = []
 _logged_in: set[str] = set()
@@ -152,7 +158,7 @@ def case(name: str) -> Callable[[Callable[[], Any]], Callable[[], Any]]:
 # --------------------------------------------------------------------------------------------
 
 
-@case("tools: 19 tools listed, data tools read-only, session tools not destructive-by-default")
+@case("tools: 21 tools listed, data tools read-only, session tools not destructive-by-default")
 def t_tools() -> Any:
     tools = asyncio.run(h.mcp_list_tools(session()))
     names = {t["name"] for t in tools}
@@ -176,6 +182,8 @@ def t_tools() -> Any:
         "list_documents",
         "get_document",
         "list_article_69b_matches",
+        "list_imss_emisiones",
+        "get_imss_emision",
     }
     expect(names == expected, f"tool names differ: {sorted(names ^ expected)}")
     data_tools = [t for t in tools if t["name"] not in ("login", "logout")]
@@ -838,6 +846,173 @@ def seeded() -> dict[str, dict[str, Any]]:
     return {c["label"]: c for c in manifest["cases"]}
 
 
+@case("imss calendar: 2026 per registro, seeded August archived, statuses, amounts on request")
+def t_imss_calendar() -> Any:
+    plain = ok(call("list_imss_emisiones", {"business_id": BU, "year": 2026}))
+    expect(plain["year"] == 2026 and plain["amounts_included"] is False, "plain calendar")
+    regs = {r["registro_patronal"]: r for r in plain["registros"]}
+    expect(IMSS_REGISTRO in regs, f"seeded registro listed: {sorted(regs)}")
+    months = {m["month"]: m for m in regs[IMSS_REGISTRO]["months"]}
+    expect(len(months) == 12, "12 months")
+    aug = months[8]
+    expect(aug["mensual"]["status"] == "archived", "EMA archived")
+    expect(aug["mensual"]["sat_archive_id"] == IMSS_EMA_ID, "EMA archive id")
+    expect(aug["mensual"]["document_id"] == IMSS_EMA_DOC, "EMA document id")
+    expect(aug["bimestral"]["status"] == "archived", "EBA archived")
+    expect(aug["bimestral"]["sat_archive_id"] == IMSS_EBA_ID, "EBA archive id")
+    expect(aug["bimestral"]["bimestre"] == 4, "EBA bimestre 4")
+    expect(aug["bimestral"]["period_start"] == "2026-07-01", "EBA period start")
+    expect("importe_total" not in aug["mensual"], "no amounts by default")
+    expect(months[7]["bimestral"]["status"] == "not_due", "EBA not due in an odd month")
+    expect(months[1]["mensual"]["status"] == "missing", "January missing")
+    expect(months[12]["mensual"]["status"] == "future", "December future")
+    expect(regs[IMSS_REGISTRO]["rfc"] == "AAA010101AAA", "registro rfc")
+    expect(plain["summary"]["registros"] == 1, "summary registros")
+    rich = ok(
+        call(
+            "list_imss_emisiones",
+            {
+                "business_id": BU,
+                "year": 2026,
+                "with_amounts": True,
+                "registro_patronal": IMSS_REGISTRO,
+            },
+        )
+    )
+    aug2 = {m["month"]: m for m in rich["registros"][0]["months"]}[8]
+    expect(rich["amounts_included"] is True, "amounts included")
+    expect(aug2["mensual"]["importe_total"]["suma"] == 1200.0, "EMA importe_total")
+    expect(aug2["mensual"]["importe_total"]["patronal"] == 1000.0, "EMA patronal")
+    expect(aug2["mensual"]["fecha_limite_pago"] == "2026-09-17", "EMA deadline")
+    expect(aug2["mensual"]["cotizantes"] == 2, "EMA cotizantes")
+    expect(aug2["mensual"]["saldos"]["total"] == 6200.0, "EMA saldos")
+    expect(aug2["bimestral"]["importe_total"]["suma"] == 5000.0, "EBA importe_total")
+    blob = json.dumps(rich).lower()
+    expect("asegurados" not in blob and '"nss"' not in blob, "calendar carries no worker data")
+    ten = ok(
+        call(
+            "list_imss_emisiones",
+            {"business_id": BU, "year": 2026, "registro_patronal": "z999999990"},
+        )
+    )
+    expect(ten["registros"][0]["registro_patronal"] == IMSS_REGISTRO, "10-char key by prefix")
+    err(
+        call(
+            "list_imss_emisiones",
+            {"business_id": BU, "year": 2026, "registro_patronal": "Z0000000000"},
+        ),
+        "not_found",
+    )
+    err(call("list_imss_emisiones", {"business_id": BU, "year": 1999}), "invalid_input")
+    empty = ok(call("list_imss_emisiones", {"business_id": BU, "year": 2024}))
+    expect(empty["summary"]["months_archived"] == 0, "2024 has nothing archived")
+    return {
+        "august": {k: aug[k]["status"] for k in ("mensual", "bimestral")},
+        "ema_total": aug2["mensual"]["importe_total"],
+        "eba_total": aug2["bimestral"]["importe_total"],
+    }
+
+
+@case("imss cédula: by id and by tipo/year/month, workers only on request and capped, guard")
+def t_imss_emision() -> Any:
+    ema = ok(call("get_imss_emision", {"business_id": BU, "sat_archive_id": IMSS_EMA_ID}))
+    expect(ema["tipo"] == "mensual" and ema["year"] == 2026 and ema["month"] == 8, "identity")
+    expect(ema["registro_patronal"] == IMSS_REGISTRO, "registro")
+    expect(ema["patron"]["rfc"] == "AAA010101AAA", "patron rfc")
+    expect(ema["conceptos"]["importe_total"]["suma"] == 1200.0, "conceptos")
+    expect(ema["saldos"]["total"] == 6200.0, "saldos")
+    expect(ema["emision"]["fecha_limite_pago"] == "2026-09-17", "deadline")
+    expect(ema["workers_total"] == 2 and "workers" not in ema, "workers hidden by default")
+    blob = json.dumps(ema).lower()
+    expect("asegurados" not in blob and "curp" not in blob, "no personal data by default")
+    expect(ema["files"]["document"]["document_id"] == IMSS_EMA_DOC, "workbook document id")
+    expect(bool(ema["files"]["cedula_pdf"]), "cédula pdf listed")
+    expect(ema["files"]["evidences_count"] == 2, "evidence count")
+    latest = ok(
+        call(
+            "get_imss_emision",
+            {"business_id": BU, "tipo": "bimestral", "year": 2026, "month": 8},
+        )
+    )
+    expect(latest["sat_archive_id"] == IMSS_EBA_ID, "latest EBA by period")
+    expect(latest["bimestre"] == 4 and latest["period_start"] == "2026-07-01", "EBA period")
+    capped = ok(
+        call(
+            "get_imss_emision",
+            {
+                "business_id": BU,
+                "sat_archive_id": IMSS_EBA_ID,
+                "include_workers": True,
+                "max_workers": 1,
+            },
+        )
+    )
+    expect(len(capped["workers"]) == 1 and capped["workers_truncated"] is True, "capped rows")
+    row = capped["workers"][0]
+    expect(len(row["nss"]) == 11, "full nss")
+    expect("curp" not in row and "sources" not in json.dumps(row), "row without curp/sources")
+    expect(bool(row.get("credito")) and bool(row["credito"].get("numero")), "EBA credit")
+    cot = row["cotizaciones"][0]
+    expect(
+        all(k in cot for k in ("movimiento_code", "dias", "salario_base_cotizacion", "suma")),
+        "cotización row shape",
+    )
+    allw = ok(
+        call(
+            "get_imss_emision",
+            {"business_id": BU, "sat_archive_id": IMSS_EMA_ID, "include_workers": True},
+        )
+    )
+    expect(len(allw["workers"]) == 2 and allw["workers_truncated"] is False, "all workers")
+    err(call("get_imss_emision", {"business_id": BU}), "invalid_input")
+    err(
+        call(
+            "get_imss_emision",
+            {"business_id": BU, "tipo": "bimestral", "year": 2026, "month": 7},
+        ),
+        "invalid_input",
+    )
+    err(
+        call("get_imss_emision", {"business_id": BU, "tipo": "anual", "year": 2026, "month": 8}),
+        "invalid_input",
+    )
+    err(
+        call("get_imss_emision", {"business_id": BU, "tipo": "mensual", "year": 2026, "month": 5}),
+        "not_found",
+    )
+    err(
+        call(
+            "get_imss_emision",
+            {"business_id": BU, "sat_archive_id": "00000000-0000-0000-0000-000000000000"},
+        ),
+        "not_found",
+    )
+    diot = ok(
+        call(
+            "list_sat_archives",
+            {"business_id": BU, "extraction_type": "mx.declaracion_mensual_diot", "limit": 1},
+        )
+    )
+    if diot["items"]:
+        err(
+            call(
+                "get_imss_emision",
+                {"business_id": BU, "sat_archive_id": diot["items"][0]["sat_archive_id"]},
+            ),
+            "invalid_input",
+        )
+    generic = ok(call("get_sat_archive", {"business_id": BU, "sat_archive_id": IMSS_EMA_ID}))
+    extracted = generic["extracted_data"]
+    expect("asegurados" not in extracted, "generic guard strips workers")
+    expect("sources" not in (extracted.get("extraction") or {}), "generic guard strips sources")
+    expect(generic.get("workers_total") == 2, "generic guard reports workers_total")
+    return {
+        "ema_total": ema["conceptos"]["importe_total"],
+        "workers_total": ema["workers_total"],
+        "eba_credit": row["credito"].get("numero"),
+    }
+
+
 @case("seeded: 60-line entry resolves every account and balances")
 def t_seed_many_lines() -> Any:
     entry = seeded()["many-lines-60"]
@@ -1312,6 +1487,8 @@ def run_suite() -> int:
         t_sat_archive,
         t_documents,
         t_article_69b,
+        t_imss_calendar,
+        t_imss_emision,
         t_seed_many_lines,
         t_seed_unicode,
         t_seed_unbalanced,

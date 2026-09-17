@@ -79,3 +79,10 @@ StartPeriodId = Annotated[str | int, Field(description=DESC_START_PERIOD_ID)]
 EndPeriodId = Annotated[str | int | None, Field(description=DESC_END_PERIOD_ID)]
 Limit = Annotated[int, Field(description=DESC_LIMIT)]
 Offset = Annotated[int, Field(description=DESC_OFFSET)]
+
+DESC_REGISTRO_PATRONAL = (
+    "Employer registration with the IMSS (registro patronal): the 10 characters the IDSE portal "
+    "shows or the full 11 with the check digit, as printed on the cédula; separators are ignored. "
+    "Omit when the business has a single registration."
+)
+RegistroPatronal = Annotated[str | None, Field(description=DESC_REGISTRO_PATRONAL)]
