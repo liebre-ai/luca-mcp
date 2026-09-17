@@ -4,7 +4,8 @@ The installable [Model Context Protocol](https://modelcontextprotocol.io) client
 accounting assistant of the Liebre platform. It runs on your machine over stdio, logs you in with
 your Liebre account through the browser, and gives Claude Code, Codex, Cursor and other MCP
 clients read-only tools over your businesses: periods, journal entries, financial reports, VAT
-determination, SAT filings, SAT archives and documents, always with your own permissions.
+determination, SAT filings, SAT archives, IMSS emisiones and documents, always with your own
+permissions.
 
 Design: `docs/plans/2026-09-08-v2-rai-auth-and-thin-client.md` and, for the login through the
 Liebre app, `docs/plans/2026-09-08-liebre-app-login-plan.md`. The server side lives in `ant-rai`
@@ -108,6 +109,8 @@ Data tools, all read-only and annotated as such:
 | `list_sat_archives(business_id, extraction_type?, status?, requested_from?, requested_to?, limit?, offset?)` | SAT extraction runs with `available_types`. |
 | `get_sat_archive(business_id, sat_archive_id? \| extraction_type?, include_extracted_data?, max_detail_rows?)` | Structured `extracted_data` (e.g. declared DIOT totals and per-supplier details) plus files. |
 | `list_article_69b_matches(business_id, start_period_id, end_period_id?, statuses?, limit?, offset?)` | Customers/suppliers on the SAT 69-B list (EFOS) for the period's CFDIs: summary, MXN amounts, exposure, one row per matched RFC with status history. `statuses` defaults to `presunto, definitivo`. |
+| `list_imss_emisiones(business_id, year, registro_patronal?, with_amounts?)` | Calendar of the archived IMSS cédulas (EMA monthly, EBA bimonthly) per registro patronal: archived / missing / future / not_due per month, archive and document ids, summaries; `with_amounts` adds the figures. |
+| `get_imss_emision(business_id, sat_archive_id? \| tipo+year+month(+registro_patronal), include_workers?, max_workers?)` | One cédula: employer, period, `fecha_limite_pago`, `conceptos` (patronal / obrera / suma), `saldos`, warnings, files, `workers_total`; worker rows with full NSS only when `include_workers` is true, capped. |
 | `list_documents(business_id, document_type?, year?, month?, limit?, offset?)` | Stored fiscal documents with `available_types`. |
 | `get_document(business_id, document_id)` | Metadata and a short-lived signed `download_url`. |
 
@@ -122,7 +125,7 @@ it returns.
 Agents that cap the number of active tools (Cursor allows about 40 across all servers) can load a
 subset: `LUCA_MCP_TOOLSETS=reports,sat` in the server's `env` exposes only those modules. The
 toolsets are the modules of `src/luca_mcp/tools/`: `businesses`, `reports`, `journal_entries`,
-`sat` and `documents`; `login`, `logout` and `whoami` are always available. An unknown name stops
+`sat`, `imss` and `documents`; `login`, `logout` and `whoami` are always available. An unknown name stops
 the server at startup with the list of known ones.
 
 ### Errors
@@ -159,7 +162,7 @@ uv run python tests/e2e/tools_suite.py     # 36 cases against dev bu-2 (use --on
 
 Layout of `src/luca_mcp/`: `server.py` assembles the FastMCP server; the tools live in `tools/`,
 one module per Liebre domain (`session`, `businesses`, `reports`, `journal_entries`, `sat`,
-`documents`), each exposing `register(mcp, client)`; `tools/_common.py` holds the annotations and
+`imss`, `documents`), each exposing `register(mcp, client)`; `tools/_common.py` holds the annotations and
 the path-segment check; `api.py` is the HTTP client for rai (`fetch` for tools); `oauth.py` the
 browser login and token storage; `errors.py` the error envelope; `prompts/` the two prompts.
 
