@@ -33,11 +33,12 @@ def create_server(config: Config | None = None) -> FastMCP:
     config = config or load_config()
     client = RaiClient(config)
     mcp = FastMCP("luca", instructions=INSTRUCTIONS, version=__version__, mask_error_details=False)
-    tools.register_all(mcp, client)
+    tools.register_all(mcp, client, config.toolsets)
     prompts.register(mcp)
     return mcp
 
 
 def run_stdio() -> None:
     logging.basicConfig(level=logging.WARNING)
-    create_server().run(transport="stdio")
+    # No fastmcp banner: it is noise on stderr and triggers a PyPI version check on every start.
+    create_server().run(transport="stdio", show_banner=False)
