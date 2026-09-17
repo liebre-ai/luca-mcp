@@ -180,3 +180,20 @@ document. Side effects on bu-2/af-2: two archive rows, their files, and two Docu
 (employer registration `Z9999999901`). Every file name tagged `LUCA-MCP-E2E`; the synthetic RFC
 `AAA010101AAA` differs from bu-2's, so rai's reuse logic never picks the seed up. Seeded evidence
 is never deleted, by convention.
+
+## Evidence (2026-09-17, branch `feat/imss-tools`, version 0.4.0)
+
+- Server side merged: ant-rai PR #1068 (https://github.com/liebre-ai/ant-rai/pull/1068), contract as
+  agreed, 82 MCP tests, checked against dev Liebre with the bu-2 seed; dev deploy on merge.
+- Seed on bu-2 (never delete): EMA August 2026 `ebf6312b-61b8-410d-adf7-d0ffa6c19b26` and EBA
+  bimestre 4 `8912df36-50c1-4267-8ae0-2b2b2adbf2a3`, registro `Z9999999901`, synthetic RFC
+  `AAA010101AAA`, files tagged `LUCA-MCP-E2E`.
+- `ruff check` / `ruff format --check` clean; `uv run pytest` 11 passed (21 tools, every parameter
+  described).
+- E2E against the local rai serving the merged code: `tests/e2e/tools_suite.py --only imss` 2/2
+  (calendar statuses, amounts tier, 10-character registro by prefix, `not_found` and
+  `invalid_input` paths, worker cap with full NSS and no CURP/sources, the guard on
+  `get_sat_archive`); the real `uv run luca-mcp` process returns the seeded cédula without worker
+  rows. The full suite result is recorded in the PR.
+- Dev verification after the deploy: from a logged-in client, `list_imss_emisiones(bu-2, 2026,
+  with_amounts=true)` must show August archived with importe_total 1200 (EMA) and 5000 (EBA).
