@@ -2,41 +2,17 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
 from typing import Any
 
 import httpx
-from fastmcp.exceptions import ToolError
 
 from luca_mcp import __version__, oauth
 from luca_mcp.config import Config
+from luca_mcp.errors import NOT_LOGGED_IN, LucaError, error_envelope
 
 logger = logging.getLogger("luca_mcp.api")
-
-NOT_LOGGED_IN = {
-    "error": {
-        "code": "not_authenticated",
-        "message": "You are not logged in to Luca.",
-        "hint": "Call the `login` tool (opens your browser), or run `luca-mcp login` in a terminal.",
-    }
-}
-
-
-class LucaError(ToolError):
-    """Tool error carrying rai's JSON envelope verbatim."""
-
-    def __init__(self, envelope: dict[str, Any]) -> None:
-        self.envelope = envelope
-        super().__init__(json.dumps(envelope, ensure_ascii=False, default=str))
-
-
-def _envelope(code: str, message: str, hint: str | None = None, **extra: Any) -> dict[str, Any]:
-    error: dict[str, Any] = {"code": code, "message": message}
-    if hint:
-        error["hint"] = hint
-    error.update({k: v for k, v in extra.items() if v is not None})
-    return {"error": error}
 
 
 class RaiClient:
@@ -51,6 +27,15 @@ class RaiClient:
 
     def close(self) -> None:
         self._http.close()
+
+    @property
+    def config(self) -> Config:
+        return self._config
+
+    async def fetch(self, path: str, **params: Any) -> Any:
+        """`get` for async tools: the blocking call runs in a worker thread so the event loop keeps
+        serving other tool calls. ``None`` parameters are dropped."""
+        return await asyncio.to_thread(self.get, path, params)
 
     # ---------------------------------------------------------------------------------------
     def _tokens(self) -> oauth.Tokens:
@@ -69,7 +54,7 @@ class RaiClient:
                 tokens = oauth.refresh(self._config, tokens)
             except oauth.LoginError as exc:
                 raise LucaError(
-                    _envelope(
+                    error_envelope(
                         "login_expired",
                         "Your Luca session has expired.",
                         "Call the `login` tool or run `luca-mcp login`.",
@@ -84,7 +69,7 @@ class RaiClient:
             return self._http.get(path, params=params, headers={"Authorization": f"Bearer {token}"})
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             raise LucaError(
-                _envelope(
+                error_envelope(
                     "upstream_unavailable",
                     f"Could not reach Luca's server at {self._config.rai_url}.",
                     "Check your network or LUCA_RAI_URL, then try again.",
@@ -114,7 +99,7 @@ class RaiClient:
                 404: "not_found",
                 422: "invalid_input",
             }.get(response.status_code, "upstream_error")
-            envelope = _envelope(
+            envelope = error_envelope(
                 code,
                 f"Luca's server answered HTTP {response.status_code} for {path}.",
                 details=str(body or response.text)[:300],

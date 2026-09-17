@@ -1,6 +1,6 @@
 [project]
 name = "luca-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "Luca MCP client: Liebre accounting tools for Claude Code, Codex and other MCP agents (stdio)"
 readme = "README.md"
 requires-python = ">=3.12"
