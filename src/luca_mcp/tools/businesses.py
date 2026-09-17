@@ -2,17 +2,35 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp import FastMCP
+from pydantic import Field
 
 from luca_mcp.api import RaiClient
-from luca_mcp.tools._common import READ_ONLY, segment
+from luca_mcp.tools._common import (
+    DESC_YEAR,
+    READ_ONLY,
+    AccountingFirmId,
+    BusinessId,
+    Limit,
+    Offset,
+    segment,
+)
+
+DESC_QUERY = (
+    "Case-insensitive text match against the business id, legal name, commercial name or RFC (tax "
+    "id), for example `bu-12` or `Acme`. Omit to list every business the user can access."
+)
 
 
 def register(mcp: FastMCP, client: RaiClient) -> None:
     @mcp.tool(name="list_businesses", annotations=READ_ONLY)
-    async def list_businesses(query: str | None = None, limit: int = 50, offset: int = 0) -> Any:
+    async def list_businesses(
+        query: Annotated[str | None, Field(description=DESC_QUERY)] = None,
+        limit: Limit = 50,
+        offset: Offset = 0,
+    ) -> Any:
         """List the businesses (companies) the logged-in user can work on, with their firm.
 
         Call this first; every other tool needs one of these `business_id` values (format `bu-<n>`).
@@ -23,7 +41,9 @@ def register(mcp: FastMCP, client: RaiClient) -> None:
         return await client.fetch("/businesses", query=query, limit=limit, offset=offset)
 
     @mcp.tool(name="get_business", annotations=READ_ONLY)
-    async def get_business(business_id: str, accounting_firm_id: str | None = None) -> Any:
+    async def get_business(
+        business_id: BusinessId, accounting_firm_id: AccountingFirmId = None
+    ) -> Any:
         """Profile of one business: legal/commercial name, RFC, fiscal regime, currency, status,
         creation date and its last open period. Confirm the company before reporting figures."""
         return await client.fetch(
@@ -33,7 +53,9 @@ def register(mcp: FastMCP, client: RaiClient) -> None:
 
     @mcp.tool(name="list_periods", annotations=READ_ONLY)
     async def list_periods(
-        business_id: str, year: int | None = None, accounting_firm_id: str | None = None
+        business_id: BusinessId,
+        year: Annotated[int | None, Field(description=DESC_YEAR)] = None,
+        accounting_firm_id: AccountingFirmId = None,
     ) -> Any:
         """List accounting periods of a business with their status.
 

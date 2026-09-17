@@ -2,27 +2,91 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp import FastMCP
+from pydantic import Field
 
 from luca_mcp.api import RaiClient
-from luca_mcp.tools._common import READ_ONLY, segment
+from luca_mcp.tools._common import (
+    READ_ONLY,
+    AccountingFirmId,
+    BusinessId,
+    EndPeriodId,
+    PeriodId,
+    StartPeriodId,
+    segment,
+)
 
 
 def register(mcp: FastMCP, client: RaiClient) -> None:
     @mcp.tool(name="get_trial_balance", annotations=READ_ONLY)
     async def get_trial_balance(
-        business_id: str,
-        start_period_id: str | int,
-        end_period_id: str | int | None = None,
-        levels_deep: str = "1",
-        only_detail_accounts: bool = False,
-        include_zero_balances: bool = False,
-        include_pending_entries: bool = False,
-        signed_balances: bool = False,
-        max_rows: int = 200,
-        accounting_firm_id: str | None = None,
+        business_id: BusinessId,
+        start_period_id: StartPeriodId,
+        end_period_id: EndPeriodId = None,
+        levels_deep: Annotated[
+            str,
+            Field(
+                description=(
+                    'How many levels of the account hierarchy to expand, as text: "1" (the '
+                    'default) for top-level accounts only, "2" for two levels, and so on, or '
+                    '"all" for the full hierarchy. Start shallow and only go deeper if you need '
+                    "more detail."
+                )
+            ),
+        ] = "1",
+        only_detail_accounts: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When true, returns only leaf (detail) accounts, omitting their parent/"
+                    "summary accounts. Default false, which includes accounts at every level "
+                    "down to `levels_deep`."
+                )
+            ),
+        ] = False,
+        include_zero_balances: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When true, includes accounts whose balance is zero for the period. Default "
+                    "false, which omits them."
+                )
+            ),
+        ] = False,
+        include_pending_entries: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When true, also counts draft / awaiting-validation journal entries towards "
+                    "the balances, in addition to validated ones. Default false, which excludes "
+                    "them."
+                )
+            ),
+        ] = False,
+        signed_balances: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When true, negates the balance of credit-nature accounts (e.g. liabilities, "
+                    "equity, income) so every balance follows one debit-positive sign convention. "
+                    "Default false, which reports each account's natural sign."
+                )
+            ),
+        ] = False,
+        max_rows: Annotated[
+            int,
+            Field(
+                description=(
+                    "Cap on the number of flattened rows returned, for example 200. Default 200, "
+                    "maximum 1000. When the result is capped, the response sets `truncated: "
+                    "true`, which means the request should be narrowed, not this limit raised "
+                    "further."
+                )
+            ),
+        ] = 200,
+        accounting_firm_id: AccountingFirmId = None,
     ) -> Any:
         """Trial balance (balanza de comprobación) of a business for one period or a range.
 
@@ -48,10 +112,10 @@ def register(mcp: FastMCP, client: RaiClient) -> None:
 
     @mcp.tool(name="get_balance_sheet", annotations=READ_ONLY)
     async def get_balance_sheet(
-        business_id: str,
-        start_period_id: str | int,
-        end_period_id: str | int | None = None,
-        accounting_firm_id: str | None = None,
+        business_id: BusinessId,
+        start_period_id: StartPeriodId,
+        end_period_id: EndPeriodId = None,
+        accounting_firm_id: AccountingFirmId = None,
     ) -> Any:
         """Balance sheet (estado de situación financiera) at the end of a period (`YYYYMM`), or a
         range with `end_period_id`. Returns assets, liabilities and equity as sections with line
@@ -65,10 +129,10 @@ def register(mcp: FastMCP, client: RaiClient) -> None:
 
     @mcp.tool(name="get_income_statement", annotations=READ_ONLY)
     async def get_income_statement(
-        business_id: str,
-        start_period_id: str | int,
-        end_period_id: str | int | None = None,
-        accounting_firm_id: str | None = None,
+        business_id: BusinessId,
+        start_period_id: StartPeriodId,
+        end_period_id: EndPeriodId = None,
+        accounting_firm_id: AccountingFirmId = None,
     ) -> Any:
         """Income statement (estado de resultados) for a period or a range (`YYYYMM`). Sections:
         ingresos, costo_ventas, utilidad_bruta, gastos_operacion, utilidad_operacion,
@@ -83,10 +147,19 @@ def register(mcp: FastMCP, client: RaiClient) -> None:
 
     @mcp.tool(name="get_vat_determination", annotations=READ_ONLY)
     async def get_vat_determination(
-        business_id: str,
-        period_id: str | int,
-        include_pending_entries: bool = False,
-        accounting_firm_id: str | None = None,
+        business_id: BusinessId,
+        period_id: PeriodId,
+        include_pending_entries: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When true, also counts draft / awaiting-validation journal entries towards "
+                    "the VAT determination, in addition to validated ones. Default false, which "
+                    "excludes them."
+                )
+            ),
+        ] = False,
+        accounting_firm_id: AccountingFirmId = None,
     ) -> Any:
         """VAT (IVA) determination of a business for one monthly period (`YYYYMM`), from the ledger:
         VAT collected, creditable, withheld, payable / in favour, plus warnings such as

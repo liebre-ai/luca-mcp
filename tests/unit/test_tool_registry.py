@@ -121,3 +121,16 @@ def test_toolsets_env_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
     assert load_config().toolsets == ("reports", "sat")
     monkeypatch.setenv("LUCA_MCP_TOOLSETS", "")
     assert load_config().toolsets is None
+
+
+async def test_every_parameter_has_a_description(config: Config) -> None:
+    """Agents pick tools and fill arguments from the schema; every parameter explains itself."""
+    async with Client(create_server(config)) as client:
+        listed = await client.list_tools()
+    missing = [
+        f"{tool.name}.{name}"
+        for tool in listed
+        for name, spec in (tool.input_schema or {}).get("properties", {}).items()
+        if not (spec.get("description") or "").strip()
+    ]
+    assert not missing, f"parameters without a description: {missing}"
