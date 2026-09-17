@@ -81,7 +81,7 @@ In Claude Code they appear as `/mcp__luca__luca_guidelines` and `/mcp__luca__luc
 `uvx` caches the resolved commit of the repository, so a new version does not reach an installed
 client until it runs `uvx --refresh --from git+https://github.com/liebre-ai/luca-mcp luca-mcp --help`
 and reconnects the server in the agent. To stay on a known release instead, pin a tag:
-`git+https://github.com/liebre-ai/luca-mcp@v0.3.0`. Tags follow the version in `pyproject.toml`
+`git+https://github.com/liebre-ai/luca-mcp@v0.4.0`. Tags follow the version in `pyproject.toml`
 (`vX.Y.Z`, created when a version is released); `whoami` reports the running version as
 `client_version`.
 
