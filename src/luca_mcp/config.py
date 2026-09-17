@@ -20,6 +20,8 @@ class Config:
     config_dir: Path
     request_timeout: float
     login_timeout: float
+    # Tool modules to expose (None = all). Session tools are always on. See tools/__init__.py.
+    toolsets: tuple[str, ...] | None = None
 
     @property
     def api_root(self) -> str:
@@ -40,4 +42,11 @@ def load_config() -> Config:
         config_dir=config_dir,
         request_timeout=float(os.getenv("LUCA_MCP_TIMEOUT", "60")),
         login_timeout=float(os.getenv("LUCA_MCP_LOGIN_TIMEOUT", "300")),
+        toolsets=_toolsets(os.getenv("LUCA_MCP_TOOLSETS", "")),
     )
+
+
+def _toolsets(value: str) -> tuple[str, ...] | None:
+    """`LUCA_MCP_TOOLSETS=reports,sat` limits the tools an agent sees; empty means all."""
+    names = tuple(name.strip() for name in value.split(",") if name.strip())
+    return names or None

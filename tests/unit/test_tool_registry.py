@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,7 @@ from fastmcp import Client, FastMCP
 
 from luca_mcp import tools
 from luca_mcp.api import RaiClient
-from luca_mcp.config import Config
+from luca_mcp.config import Config, load_config
 from luca_mcp.server import create_server
 
 # In listing order: MODULES order in luca_mcp/tools/__init__.py, then definition order.
@@ -96,3 +97,27 @@ async def test_prompts_are_registered(config: Config) -> None:
     async with Client(create_server(config)) as client:
         prompts = await client.list_prompts()
     assert {p.name for p in prompts} == {"luca_guidelines", "luca_navigation"}
+
+
+async def test_toolsets_limit_the_data_tools_but_keep_the_session_tools(config: Config) -> None:
+    only_reports = dataclasses.replace(config, toolsets=("reports",))
+    async with Client(create_server(only_reports)) as client:
+        names = [t.name for t in await client.list_tools()]
+    assert names == ["login", "logout", "whoami"] + [
+        "get_trial_balance",
+        "get_balance_sheet",
+        "get_income_statement",
+        "get_vat_determination",
+    ]
+
+
+def test_unknown_toolset_fails_at_startup(config: Config) -> None:
+    with pytest.raises(ValueError, match="Unknown toolset"):
+        create_server(dataclasses.replace(config, toolsets=("reports", "typo")))
+
+
+def test_toolsets_env_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LUCA_MCP_TOOLSETS", " reports, sat ,")
+    assert load_config().toolsets == ("reports", "sat")
+    monkeypatch.setenv("LUCA_MCP_TOOLSETS", "")
+    assert load_config().toolsets is None
